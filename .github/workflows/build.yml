@@ -1,0 +1,47 @@
+
+name: Build ESP32 firmware and web installer
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: skyorb-pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: python -m pip install platformio
+      - name: Compile for ESP32-WROOM-32
+        run: pio run
+      - name: Assemble ESP Web Tools installer
+        run: python scripts/prepare_installer.py
+      - name: Keep compiled installer as downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skyorb-browser-installer
+          path: web-installer/
+      - name: Prepare GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-installer
+      - name: Deploy the browser installer
+        id: deployment
+        uses: actions/deploy-pages@v4
