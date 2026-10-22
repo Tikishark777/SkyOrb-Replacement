@@ -27,6 +27,8 @@ jobs:
           python-version: '3.11'
       - name: Install PlatformIO
         run: python -m pip install platformio
+      - name: Generate offline airport catalogue (OurAirports)
+        run: python scripts/generate_airports.py        
       - name: Compile for ESP32-WROOM-32
         run: pio run
       - name: Assemble ESP Web Tools installer
