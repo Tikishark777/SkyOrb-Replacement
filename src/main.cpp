@@ -13,6 +13,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <SPI.h>
+#include <string.h>
 #include <time.h>
 #include <math.h>
 #include <ArduinoJson.h>
@@ -32,9 +33,9 @@ static constexpr float MILES_TO_NM=0.868976f;
 
 Adafruit_GC9A01A radarPhysical(PIN_RADAR_CS, PIN_RADAR_DC, PIN_RADAR_RST);
 Adafruit_GC9A01A clockPhysical(PIN_CLOCK_CS, PIN_CLOCK_DC, PIN_CLOCK_RST);
-// Draw a complete frame in RAM before sending it to a display.  The previous
-// firmware erased the physical TFT 7 times/second, making the sweep strobe.
-// A single 16-bit canvas is shared by the radar and clock to conserve RAM.
+// Persistent 16-bit BACKGROUND for the radar (airports, flights, and grid).
+// Only damaged tiles under the previous sweep are copied to the display.
+// The clock draws directly to its own display, never touching this canvas.
 GFXcanvas16 frameBuffer(240, 240);
 static Adafruit_GFX &drawingSurface(Adafruit_GC9A01A &physical) {
   return frameBuffer.getBuffer() ? static_cast<Adafruit_GFX &>(frameBuffer)
@@ -58,6 +59,7 @@ String otaError;
 bool servicesReady=false;
 static constexpr uint32_t AP_GRACE_PERIOD=15UL*60UL*1000UL; // 15-minute recovery window after restart
 volatile bool askTZ=false, askAirports=false, askFlights=true, shouldSave=false;
+volatile bool radarSceneDirty=true; // Rebuild static radar only when flight or configuration data changes.
 
 struct Airport {String name; float lat=0, lon=0;};
 struct Aircraft {
@@ -215,7 +217,7 @@ void discoverAirports(){
   if(n){
     xSemaphoreTake(guard,portMAX_DELAY);
     cfg.airportCount=n;for(int i=0;i<n;i++)cfg.airports[i]=found[i];
-    xSemaphoreGive(guard);shouldSave=true;
+    xSemaphoreGive(guard);shouldSave=true;radarSceneDirty=true;
   }
   Serial.printf("[Airports] Found %d airport markers\n",n);
 }
@@ -263,6 +265,7 @@ void fetchFlights(){
     live.updatedAt=millis();live.httpCode=code;live.source=providers[source];
     live.status=count?"Tracking aircraft":"Connected; no aircraft currently in range";
     xSemaphoreGive(guard);
+    radarSceneDirty=true;
     Serial.printf("[Flights] %s: %d nearby aircraft\n",providers[source].c_str(),count);
     return;
   }
@@ -270,6 +273,7 @@ void fetchFlights(){
   live.count=0;live.httpCode=lastCode;live.source="none";
   live.status="Flight-data request failed (see Serial / API status)";
   xSemaphoreGive(guard);
+  radarSceneDirty=true;
 }
 
 void worker(void*){
@@ -312,6 +316,7 @@ void publishLive(){
   d["homeIp"]=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():"";
   d["setupIp"]=apMode?WiFi.softAPIP().toString():"";
   d["setupActive"]=apMode;d["buffered"]=frameBuffer.getBuffer()!=nullptr;
+  d["sweepMode"]=frameBuffer.getBuffer()?"incremental":"static-low-memory";
   JsonArray ar=d["airports"].to<JsonArray>();
   for(int i=0;i<c.airportCount;i++){
     JsonObject o=ar.add<JsonObject>();o["name"]=c.airports[i].name;o["lat"]=c.airports[i].lat;o["lon"]=c.airports[i].lon;
@@ -345,7 +350,7 @@ void onSave(){
   cfg.locationSet=true;
   if(moved){cfg.tzName="UTC fallback";cfg.tzAbbr="UTC";cfg.utcOffset=roundf(cfg.fallback*3600);cfg.airportCount=0;}
   xSemaphoreGive(guard);
-  savePrefs();askFlights=true;askTZ=true;if(moved)askAirports=true;
+  savePrefs();radarSceneDirty=true;askFlights=true;askTZ=true;if(moved)askAirports=true;
   JsonDocument d;d["ok"]=true;
   d["message"]="Location saved. The radar will request nearby flights; airports and timezone update in the background.";
   replyJson(d);
@@ -414,7 +419,7 @@ void onAirportCode(){
   }
   if(cfg.airportCount>=MAX_AIRPORTS){xSemaphoreGive(guard);errorJson("Airport list is full.");return;}
   Airport &a=cfg.airports[cfg.airportCount++];a.name=code;a.lat=lat;a.lon=lon;
-  xSemaphoreGive(guard);savePrefs();
+  xSemaphoreGive(guard);savePrefs();radarSceneDirty=true;
   JsonDocument response;response["ok"]=true;response["message"]=String("Airport ")+code+" added.";
   replyJson(response);
 }
@@ -425,12 +430,12 @@ void onAirportAdd(){
   xSemaphoreTake(guard,portMAX_DELAY);
   if(cfg.airportCount>=MAX_AIRPORTS){xSemaphoreGive(guard);errorJson("Airport list full");return;}
   Airport &a=cfg.airports[cfg.airportCount++];a.name=name;a.lat=lat;a.lon=lon;
-  xSemaphoreGive(guard);savePrefs();redirectRoot();
+  xSemaphoreGive(guard);savePrefs();radarSceneDirty=true;redirectRoot();
 }
 void onAirportDelete(){int i=server.arg("i").toInt();xSemaphoreTake(guard,portMAX_DELAY);
   if(i<0||i>=cfg.airportCount){xSemaphoreGive(guard);errorJson("No such airport");return;}
   for(int j=i;j<cfg.airportCount-1;j++)cfg.airports[j]=cfg.airports[j+1];cfg.airportCount--;
-  xSemaphoreGive(guard);savePrefs();JsonDocument d;d["ok"]=true;replyJson(d);
+  xSemaphoreGive(guard);savePrefs();radarSceneDirty=true;JsonDocument d;d["ok"]=true;replyJson(d);
 }
 // Captive-portal pages are deliberately separate from the main radar dashboard.
 // The AP uses 192.168.4.1; once connected to home Wi-Fi the numeric home IP
@@ -556,7 +561,7 @@ void initWeb(){
   server.on("/airport/delete",HTTP_POST,onAirportDelete);
   server.on("/airport/clear",HTTP_POST,[](){
     xSemaphoreTake(guard,portMAX_DELAY);cfg.airportCount=0;xSemaphoreGive(guard);
-    savePrefs();JsonDocument d;d["ok"]=true;replyJson(d);
+    savePrefs();radarSceneDirty=true;JsonDocument d;d["ok"]=true;replyJson(d);
   });
   server.on("/theme",HTTP_POST,[](){
     String a=server.arg("accent");
@@ -583,26 +588,43 @@ void center(Adafruit_GFX &t,const String &s,int y,uint8_t sz,uint16_t col){
 }
 // Faithful dual-display appearance: crisp white time and amber date on black.
 // A complete framebuffer transfer keeps drawing changes invisible to the eye.
+// The clock is updated only when text actually changes (once per minute,
+// or on date/time-zone/format changes). It NEVER shares the radar background
+// buffer and never repeatedly blanks the physical screen.
 void renderClock(const Config &c){
-  Adafruit_GC9A01A &display=clockScreen(c);
-  Adafruit_GFX &t=drawingSurface(display);
-  t.fillScreen(0x0000);
+  Adafruit_GC9A01A &t=clockScreen(c);
+  static Adafruit_GC9A01A *lastDisplay=nullptr;
+  static String lastTime="",lastDate="";
+  bool first=lastDisplay!=&t;
+  if(first){t.fillScreen(0x0000);lastDisplay=&t;lastTime="";lastDate="";}
   time_t utc=time(nullptr);
-  if(utc<1700000000){center(t,"SYNCING TIME",105,2,0xFFFF);showFrame(display);return;}
+  if(utc<1700000000){
+    if(first){center(t,"SYNCING TIME",105,2,0xFFFF);}
+    return;
+  }
   time_t localEpoch=utc+c.utcOffset;struct tm tmTime;gmtime_r(&localEpoch,&tmTime);
   int hour=tmTime.tm_hour;bool pm=hour>=12;
   if(!c.clock24){hour%=12;if(hour==0)hour=12;}
   char buf[64];snprintf(buf,sizeof(buf),"%02d:%02d",hour,tmTime.tm_min);
   String top=String(buf)+" "+c.tzAbbr;
   if(top.length()>14)top=top.substring(0,14);
-  center(t,top,89,top.length()>11?2:3,0xFFFF);
-  if(!c.clock24)center(t,pm?"PM":"AM",122,2,0xFFFF);
+  String stamp=top+(c.clock24?"":pm?" PM":" AM");
+  if(stamp!=lastTime){
+    t.fillRect(8,77,224,63,0x0000);
+    center(t,top,89,top.length()>11?2:3,0xFFFF);
+    if(!c.clock24)center(t,pm?"PM":"AM",122,2,0xFFFF);
+    lastTime=stamp;
+  }
   static const char* weekdays[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
   static const char* months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
-  center(t,weekdays[tmTime.tm_wday],142,2,0xFDC7);
   snprintf(buf,sizeof(buf),"%s %02d, %04d",months[tmTime.tm_mon],tmTime.tm_mday,tmTime.tm_year+1900);
-  center(t,buf,168,2,0xFDC7);
-  showFrame(display);
+  String date=String(weekdays[tmTime.tm_wday])+"/"+buf;
+  if(date!=lastDate){
+    t.fillRect(8,139,224,66,0x0000);
+    center(t,weekdays[tmTime.tm_wday],142,2,0xFDC7);
+    center(t,buf,168,2,0xFDC7);
+    lastDate=date;
+  }
 }
 struct XY {int x=120,y=120;float d=0;};
 XY project(float latitude,float longitude,const Config &c){
@@ -619,9 +641,7 @@ void drawPlane(Adafruit_GFX &t,int x,int y,float heading,uint16_t col){
   int side2X=lroundf(x-5*dx+4*dy),side2Y=lroundf(y-5*dy-4*dx);
   t.fillTriangle(noseX,noseY,sideX,sideY,side2X,side2Y,col);
 }
-void renderRadar(const Config &c){
-  Adafruit_GC9A01A &display=radarScreen(c);
-  Adafruit_GFX &t=drawingSurface(display);
+void drawRadarBackground(const Config &c,Adafruit_GFX &t){
   t.fillScreen(0x0000);
   uint16_t accent=green;
   t.drawCircle(120,120,113,accent);
@@ -630,12 +650,6 @@ void renderRadar(const Config &c){
   t.setTextColor(accent);t.setTextSize(1);
   t.setCursor(117,5);t.print("N");t.setCursor(117,230);t.print("S");
   t.setCursor(4,117);t.print("W");t.setCursor(229,117);t.print("E");
-  float sweep=fmodf((millis()%11000UL)*360.0f/11000.0f,360.0f)*DEG2RAD;
-  for(int k=16;k>=0;k--){
-    float angle=sweep-k*0.012f;
-    uint16_t shade=(k==0?0x07E0:(k<4?0x05C0:(k<10?0x0300:0x0180)));
-    t.drawLine(120,120,lroundf(120+100*sinf(angle)),lroundf(120-100*cosf(angle)),shade);
-  }
   for(int i=0;i<c.airportCount;i++){
     XY p=project(c.airports[i].lat,c.airports[i].lon,c);
     if(p.d>c.radius*MILES_TO_NM||p.x<5||p.x>235||p.y<5||p.y>235)continue;
@@ -650,11 +664,7 @@ void renderRadar(const Config &c){
   for(int i=0;i<count;i++){
     Aircraft &a=seen[i];XY p=project(a.lat,a.lon,c);
     if(p.d>c.radius*MILES_TO_NM||p.x<8||p.x>231||p.y<8||p.y>231)continue;
-    float bearing=atan2f((a.lon-c.lon)*cosf(c.lat*DEG2RAD),(a.lat-c.lat));
-    if(bearing<0)bearing+=2*PI;
-    float difference=fabsf(atan2f(sinf(bearing-sweep),cosf(bearing-sweep)));
-    uint16_t col=difference<0.28f?0xffc0:accent;
-    if(difference<0.20f)t.drawCircle(p.x,p.y,8,col);
+    uint16_t col=0x87ff; // blue-white planes on static radar scene
     drawPlane(t,p.x,p.y,a.heading,col);
     String label=a.flight.length()?a.flight:a.hex;
     if(label.length()>8)label.remove(8);
@@ -679,12 +689,99 @@ void renderRadar(const Config &c){
     t.fillRoundRect(42,188,156,13,3,0x0102);
     center(t,WiFi.localIP().toString(),191,1,0xffff);
   }
-  showFrame(display);
 }
+
+// Move only the sweep.  The static background and aircraft are retained on
+// the physical TFT between frames; no physical fillScreen() is called here.
+// Each 20 x 20 tile covering the old sweep is restored from the 16-bit
+// background canvas. This is much less SPI traffic than transferring 240x240
+// pixels 5 times per second, and never shows the cleared screen.
+static constexpr int TILE_SIZE=20;
+static constexpr int TILE_ROWS=12;
+static constexpr int SWEEP_RAYS=17;
+static constexpr int SWEEP_LENGTH=100;
+static float previousSweep=0.0f;
+static bool previousSweepValid=false;
+static Adafruit_GC9A01A *lastRadarDisplay=nullptr;
+static uint32_t lastRadarScene=0;
+static bool lastWifiState=false;
+static bool lastApState=false;
+
+void markOldSweepTiles(float angle,bool (&dirty)[TILE_ROWS][TILE_ROWS]){
+  for(int ray=0;ray<SWEEP_RAYS;ray++){
+    float a=angle-ray*0.012f;
+    int x1=lroundf(120+SWEEP_LENGTH*sinf(a));
+    int y1=lroundf(120-SWEEP_LENGTH*cosf(a));
+    int x0=120,y0=120;
+    int dx=abs(x1-x0),sx=x0<x1?1:-1,dy=-abs(y1-y0),sy=y0<y1?1:-1,err=dx+dy;
+    while(true){
+      if(x0>=0&&x0<240&&y0>=0&&y0<240)dirty[y0/TILE_SIZE][x0/TILE_SIZE]=true;
+      if(x0==x1 && y0==y1)break;
+      int e2=2*err;
+      if(e2>=dy){err+=dy;x0+=sx;}
+      if(e2<=dx){err+=dx;y0+=sy;}
+    }
+  }
+}
+void restoreOldSweep(Adafruit_GC9A01A &display,float angle){
+  uint16_t *background=frameBuffer.getBuffer();
+  if(!background)return;
+  bool dirty[TILE_ROWS][TILE_ROWS]={};
+  markOldSweepTiles(angle,dirty);
+  uint16_t tile[TILE_SIZE*TILE_SIZE];
+  for(int ty=0;ty<TILE_ROWS;ty++)for(int tx=0;tx<TILE_ROWS;tx++){
+    if(!dirty[ty][tx])continue;
+    int x=tx*TILE_SIZE,y=ty*TILE_SIZE;
+    for(int row=0;row<TILE_SIZE;row++){
+      memcpy(tile+row*TILE_SIZE,background+(y+row)*240+x,TILE_SIZE*sizeof(uint16_t));
+    }
+    display.drawRGBBitmap(x,y,tile,TILE_SIZE,TILE_SIZE);
+  }
+}
+void drawMovingSweep(Adafruit_GC9A01A &display,float sweep){
+  for(int k=SWEEP_RAYS-1;k>=0;k--){
+    float angle=sweep-k*0.012f;
+    uint16_t shade=(k==0?0x07E0:(k<4?0x05C0:(k<10?0x0300:0x0180)));
+    display.drawLine(120,120,lroundf(120+SWEEP_LENGTH*sinf(angle)),
+                     lroundf(120-SWEEP_LENGTH*cosf(angle)),shade);
+  }
+}
+void renderRadar(const Config &c){
+  Adafruit_GC9A01A &display=radarScreen(c);
+  uint32_t now=millis();
+  bool connected=WiFi.status()==WL_CONNECTED;
+  bool sceneRefresh=radarSceneDirty || lastRadarDisplay!=&display ||
+     (now-lastRadarScene>30000UL) || connected!=lastWifiState || apMode!=lastApState;
+  if(sceneRefresh){
+    // First record the update so changes arriving during the drawing are not lost.
+    radarSceneDirty=false;
+    lastRadarDisplay=&display;
+    lastWifiState=connected;
+    lastApState=apMode;
+    lastRadarScene=now;
+    Adafruit_GFX &t=drawingSurface(display);
+    drawRadarBackground(c,t);
+    showFrame(display);
+    previousSweepValid=false;
+    if(!frameBuffer.getBuffer()){
+      // Low-memory fallback: static radar is preferable to the old strobe.
+      Serial.println("[Radar] Insufficient heap for background; animation disabled");
+    }
+  }
+  // Without enough RAM for a background there is no safe way to erase an old
+  // sweep without destroying airport/aircraft markings. Do not flash the TFT.
+  if(!frameBuffer.getBuffer())return;
+  float sweep=fmodf((now%11000UL)*360.0f/11000.0f,360.0f)*DEG2RAD;
+  if(previousSweepValid)restoreOldSweep(display,previousSweep);
+  drawMovingSweep(display,sweep);
+  previousSweep=sweep;
+  previousSweepValid=true;
+}
+
 void renderBoot(){
   radarPhysical.fillScreen(0);clockPhysical.fillScreen(0);
-  center(radarPhysical,"SkyOrb 2",91,2,green);
-  center(clockPhysical,"SkyOrb 2",91,2,green);
+  center(radarPhysical,"SkyOrb Classic",91,2,green);
+  center(clockPhysical,"SkyOrb Classic",91,2,green);
   center(radarPhysical,"Booting...",119,1,0xffff);
   center(clockPhysical,"Booting...",119,1,0xffff);
 }
@@ -716,7 +813,7 @@ void loop(){
   if(pendingRestart && (int32_t)(millis()-restartAfter)>0)ESP.restart();
   static uint32_t radarFrame=0,clockFrame=0, wifiCheck=0, disconnectedAt=0;
   uint32_t now=millis();
-  if(now-radarFrame>180){radarFrame=now;Config c=copyCfg();renderRadar(c);}
+  if(now-radarFrame>100){radarFrame=now;Config c=copyCfg();renderRadar(c);}
   if(now-clockFrame>1000){clockFrame=now;Config c=copyCfg();renderClock(c);}
   if(pendingWifiConnect){
     pendingWifiConnect=false;
