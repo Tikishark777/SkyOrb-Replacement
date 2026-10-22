@@ -105,7 +105,13 @@ if(!$('swapper').checked)f.delete('swap');f.set('fallback',$('fallback').value);
 msg('saveStatus','Saving location...');try{let d=await api('/save',{method:'POST',body:f});await config();msg('saveStatus','✓ '+(d.message||'Location saved.'));await refresh();}
 catch(e){msg('saveStatus','Save failed: '+e.message,true)}};
 $('airportAuto').onclick=async()=>{if(!locSet){msg('airportStatus','Set your radar location first.',true);return}msg('airportStatus','Searching for nearby airports (may take up to 30 seconds)...');
-try{await api('/airport/auto',{method:'POST'});setTimeout(async()=>{await config();msg('airportStatus',airports.length?'Found '+airports.length+' airport markers.':'No airports returned yet. Try again later.');},22000);}catch(e){msg('airportStatus',e.message,true)}};
+try{await api('/airport/auto',{method:'POST'});
+let attempts=0;let timer=setInterval(async()=>{try{let d=await api('/api/live');
+if(!d.airportLookupBusy && d.airportLookupResult && d.airportLookupResult!=='Not searched yet'){
+clearInterval(timer);await config();let text=d.airportLookupResult;msg('airportStatus',text,/failed|no coded|connect/i.test(text));}
+else if(++attempts>=12){clearInterval(timer);msg('airportStatus','Airport search still running; check again shortly.',true);}
+}catch(e){clearInterval(timer);msg('airportStatus',e.message,true);}},3000);
+}catch(e){msg('airportStatus',e.message,true)}};
 $('airportByCode').onclick=async()=>{let code=$('airportCode').value.trim().toUpperCase();if(!/^[A-Z0-9]{3,4}$/.test(code)){msg('airportStatus','Use an IATA or ICAO airport code (3–4 characters).',true);return}
 msg('airportStatus','Finding airport '+code+'...');try{let d=await api('/airport/code',{method:'POST',body:new URLSearchParams({code})});await config();msg('airportStatus',d.message||'Airport added.');}
 catch(e){msg('airportStatus',e.message,true)}};
