@@ -33,19 +33,10 @@ static constexpr float MILES_TO_NM=0.868976f;
 
 Adafruit_GC9A01A radarPhysical(PIN_RADAR_CS, PIN_RADAR_DC, PIN_RADAR_RST);
 Adafruit_GC9A01A clockPhysical(PIN_CLOCK_CS, PIN_CLOCK_DC, PIN_CLOCK_RST);
-// Persistent 16-bit BACKGROUND for the radar (airports, flights, and grid).
-// Only damaged tiles under the previous sweep are copied to the display.
-// The clock draws directly to its own display, never touching this canvas.
-GFXcanvas16 frameBuffer(240, 240);
-static Adafruit_GFX &drawingSurface(Adafruit_GC9A01A &physical) {
-  return frameBuffer.getBuffer() ? static_cast<Adafruit_GFX &>(frameBuffer)
-                                 : static_cast<Adafruit_GFX &>(physical);
-}
-static void showFrame(Adafruit_GC9A01A &physical) {
-  if (frameBuffer.getBuffer()) {
-    physical.drawRGBBitmap(0, 0, frameBuffer.getBuffer(), 240, 240);
-  }
-}
+// Keep the static radar scene directly on its TFT. An old sweep is erased
+// in place and the static geometry is redrawn over its former pixels.
+// Avoid a 115,200-byte full-screen framebuffer; it can exhaust ESP32 heap,
+// silently disabling the radar sweep and starving HTTPS lookups.
 WebServer server(80);
 DNSServer dns;
 Preferences prefs;
@@ -60,6 +51,13 @@ bool servicesReady=false;
 static constexpr uint32_t AP_GRACE_PERIOD=15UL*60UL*1000UL; // 15-minute recovery window after restart
 volatile bool askTZ=false, askAirports=false, askFlights=true, shouldSave=false;
 volatile bool radarSceneDirty=true; // Rebuild static radar only when flight or configuration data changes.
+bool airportLookupBusy=false;
+String airportLookupResult="Not searched yet";
+void airportProgress(bool busy,const String &message){
+  xSemaphoreTake(guard,portMAX_DELAY);
+  airportLookupBusy=busy;airportLookupResult=message;
+  xSemaphoreGive(guard);
+}
 
 struct Airport {String name; float lat=0, lon=0;};
 struct Aircraft {
@@ -171,6 +169,25 @@ bool getJsonHTTPS(const String &url,JsonDocument &doc,int &code,JsonDocument *fi
   Serial.printf("[HTTP] %d %s\n",code,url.c_str());http.end();return false;
 }
 
+// Prefer a documented public Overpass mirror. The older default instance
+// frequently refuses automated requests, and TLS failure (-1) is not an
+// indication that there are no airports near the selected location.
+bool getOverpassJson(const String &query,JsonDocument &doc,int &lastCode){
+  const String encoded=urlEncode(query);
+  const char *hosts[]={
+    "https://overpass.private.coffee/api/interpreter?data=",
+    "https://lz4.overpass-api.de/api/interpreter?data="
+  };
+  for(const char *host:hosts){
+    int status=0;
+    doc.clear();
+    if(getJsonHTTPS(String(host)+encoded,doc,status)){lastCode=200;return true;}
+    lastCode=status;
+    Serial.printf("[Airport] Overpass endpoint failed (%d): %s\n",status,host);
+  }
+  return false;
+}
+
 void refreshTZ(){
   Config c=copyCfg();if(!c.locationSet||WiFi.status()!=WL_CONNECTED)return;
   String url="https://api.open-meteo.com/v1/forecast?latitude="+String(c.lat,5)+"&longitude="+String(c.lon,5)+"&current=temperature_2m&timezone=auto&forecast_days=1";
@@ -194,22 +211,30 @@ void refreshTZ(){
 // Auto-discover coded aerodromes from OSM; this is user-triggered or one time
 // after location is saved, not a repeated polling service.
 void discoverAirports(){
-  Config c=copyCfg();if(!c.locationSet||WiFi.status()!=WL_CONNECTED)return;
-  int searchM=(int)(c.radius*1609.344f); // radius in meters
-  String query="[out:json][timeout:18];nwr(around:"+String(searchM)+","+String(c.lat,5)+","+String(c.lon,5)+")[\"aeroway\"=\"aerodrome\"][\"iata\"];out center 30;";
-  String url="https://overpass-api.de/api/interpreter?data="+urlEncode(query);
+  Config c=copyCfg();
+  if(!c.locationSet){airportProgress(false,"Set radar location before searching for airports.");return;}
+  if(WiFi.status()!=WL_CONNECTED){airportProgress(false,"Connect SkyOrb to home Wi-Fi first.");return;}
+  airportProgress(true,"Searching nearby airports...");
+  int searchM=(int)(c.radius*1609.344f);
+  // Include ICAO-only airports as well as those with 3-letter IATA codes.
+  String around="(around:"+String(searchM)+","+String(c.lat,5)+","+String(c.lon,5)+")";
+  String query="[out:json][timeout:12];(nwr"+around+"[\"aeroway\"=\"aerodrome\"][\"iata\"];"
+               "nwr"+around+"[\"aeroway\"=\"aerodrome\"][\"icao\"];);out center 75;";
   JsonDocument doc;int code=0;
-  if(!getJsonHTTPS(url,doc,code)){
-    Serial.printf("[Airports] Overpass failed: %d; existing markers retained\n",code);return;
+  if(!getOverpassJson(query,doc,code)){
+    airportProgress(false,"Airport discovery failed (HTTP "+String(code)+"). Check network or retry later.");
+    Serial.printf("[Airports] All endpoints failed: %d\n",code);
+    return;
   }
   Airport found[MAX_AIRPORTS];int n=0;
-  JsonArray elements=doc["elements"].as<JsonArray>();
-  for(JsonObject e:elements){
+  for(JsonObject e:doc["elements"].as<JsonArray>()){
     if(n>=MAX_AIRPORTS)break;
-    String name=cleanName(e["tags"]["iata"].as<String>(),8);if(!name.length())continue;
+    String name=cleanName(e["tags"]["iata"].as<String>(),8);
+    if(!name.length())name=cleanName(e["tags"]["icao"].as<String>(),8);
+    if(!name.length())continue;
     float a=e["lat"].isNull()?e["center"]["lat"].as<float>():e["lat"].as<float>();
     float o=e["lon"].isNull()?e["center"]["lon"].as<float>():e["lon"].as<float>();
-    if(a<-90||a>90||o<-180||o>180)continue;
+    if(a<-90||a>90||o<-180||o>180||(!a&&!o))continue;
     bool duplicate=false;for(int j=0;j<n;j++)if(found[j].name==name)duplicate=true;
     if(duplicate)continue;
     found[n].name=name;found[n].lat=a;found[n].lon=o;n++;
@@ -218,6 +243,9 @@ void discoverAirports(){
     xSemaphoreTake(guard,portMAX_DELAY);
     cfg.airportCount=n;for(int i=0;i<n;i++)cfg.airports[i]=found[i];
     xSemaphoreGive(guard);shouldSave=true;radarSceneDirty=true;
+    airportProgress(false,"Found "+String(n)+" nearby airports.");
+  }else{
+    airportProgress(false,"No coded airports found within "+String(c.radius)+" miles. Try a larger radius or manual addition.");
   }
   Serial.printf("[Airports] Found %d airport markers\n",n);
 }
@@ -315,8 +343,12 @@ void publishLive(){
   d["ip"]=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():WiFi.softAPIP().toString();
   d["homeIp"]=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():"";
   d["setupIp"]=apMode?WiFi.softAPIP().toString():"";
-  d["setupActive"]=apMode;d["buffered"]=frameBuffer.getBuffer()!=nullptr;
-  d["sweepMode"]=frameBuffer.getBuffer()?"incremental":"static-low-memory";
+  d["setupActive"]=apMode;d["buffered"]=false;
+  d["sweepMode"]="direct-incremental";
+  xSemaphoreTake(guard,portMAX_DELAY);
+  d["airportLookupBusy"]=airportLookupBusy;
+  d["airportLookupResult"]=airportLookupResult;
+  xSemaphoreGive(guard);
   JsonArray ar=d["airports"].to<JsonArray>();
   for(int i=0;i<c.airportCount;i++){
     JsonObject o=ar.add<JsonObject>();o["name"]=c.airports[i].name;o["lat"]=c.airports[i].lat;o["lon"]=c.airports[i].lon;
@@ -404,8 +436,8 @@ void onAirportCode(){
   String key=code.length()==3?"iata":"icao";
   String query="[out:json][timeout:14];nwr(around:250000,"+String(c.lat,5)+","+String(c.lon,5)+")[\"aeroway\"=\"aerodrome\"][\""+key+"\"=\""+code+"\"];out center 1;";
   JsonDocument doc;int status=0;
-  if(!getJsonHTTPS("https://overpass-api.de/api/interpreter?data="+urlEncode(query),doc,status)){
-    errorJson("Airport lookup service unavailable (HTTP " +String(status)+"). Try Auto-find nearby airports instead.",502);return;
+  if(!getOverpassJson(query,doc,status)){
+    errorJson("Airport lookup service unavailable (HTTP " +String(status)+"). Please retry later, or add coordinates manually.",502);return;
   }
   JsonArray matches=doc["elements"].as<JsonArray>();
   if(matches.isNull()||matches.size()==0){errorJson("No airport found with that code near your radar location. Try Auto-find nearby airports.",404);return;}
@@ -572,7 +604,7 @@ void initWeb(){
   });
   server.on("/airport/auto",HTTP_POST,[](){
     if(!copyCfg().locationSet){errorJson("Set a location first");return;}
-    askAirports=true;JsonDocument d;d["message"]="Airport discovery queued; reload after 10–20 seconds";replyJson(d);
+    airportProgress(true,"Airport search queued");askAirports=true;JsonDocument d;d["message"]="Airport discovery queued";replyJson(d);
   });
   server.onNotFound([](){if(apMode && server.client().localIP()==WiFi.softAPIP())captiveRedirect();else server.send(404,"text/plain","Not found");});
   server.begin();
@@ -641,8 +673,8 @@ void drawPlane(Adafruit_GFX &t,int x,int y,float heading,uint16_t col){
   int side2X=lroundf(x-5*dx+4*dy),side2Y=lroundf(y-5*dy-4*dx);
   t.fillTriangle(noseX,noseY,sideX,sideY,side2X,side2Y,col);
 }
-void drawRadarBackground(const Config &c,Adafruit_GFX &t){
-  t.fillScreen(0x0000);
+void drawRadarBackground(const Config &c,Adafruit_GFX &t,bool clearDisplay=true){
+  if(clearDisplay)t.fillScreen(0x0000);
   uint16_t accent=green;
   t.drawCircle(120,120,113,accent);
   t.drawCircle(120,120,100,lowgreen);t.drawCircle(120,120,66,lowgreen);t.drawCircle(120,120,33,lowgreen);
@@ -691,14 +723,10 @@ void drawRadarBackground(const Config &c,Adafruit_GFX &t){
   }
 }
 
-// Move only the sweep.  The static background and aircraft are retained on
-// the physical TFT between frames; no physical fillScreen() is called here.
-// Each 20 x 20 tile covering the old sweep is restored from the 16-bit
-// background canvas. This is much less SPI traffic than transferring 240x240
-// pixels 5 times per second, and never shows the cleared screen.
-static constexpr int TILE_SIZE=20;
-static constexpr int TILE_ROWS=12;
-static constexpr int SWEEP_RAYS=17;
+// Direct incremental sweep: no large framebuffer and no full-screen clear
+// during animation. Old rays are erased, permanent radar features are restored,
+// and new rays are drawn. This keeps aircraft visible even on low-memory boards.
+static constexpr int SWEEP_RAYS=10;
 static constexpr int SWEEP_LENGTH=100;
 static float previousSweep=0.0f;
 static bool previousSweepValid=false;
@@ -707,41 +735,10 @@ static uint32_t lastRadarScene=0;
 static bool lastWifiState=false;
 static bool lastApState=false;
 
-void markOldSweepTiles(float angle,bool (&dirty)[TILE_ROWS][TILE_ROWS]){
-  for(int ray=0;ray<SWEEP_RAYS;ray++){
-    float a=angle-ray*0.012f;
-    int x1=lroundf(120+SWEEP_LENGTH*sinf(a));
-    int y1=lroundf(120-SWEEP_LENGTH*cosf(a));
-    int x0=120,y0=120;
-    int dx=abs(x1-x0),sx=x0<x1?1:-1,dy=-abs(y1-y0),sy=y0<y1?1:-1,err=dx+dy;
-    while(true){
-      if(x0>=0&&x0<240&&y0>=0&&y0<240)dirty[y0/TILE_SIZE][x0/TILE_SIZE]=true;
-      if(x0==x1 && y0==y1)break;
-      int e2=2*err;
-      if(e2>=dy){err+=dy;x0+=sx;}
-      if(e2<=dx){err+=dx;y0+=sy;}
-    }
-  }
-}
-void restoreOldSweep(Adafruit_GC9A01A &display,float angle){
-  uint16_t *background=frameBuffer.getBuffer();
-  if(!background)return;
-  bool dirty[TILE_ROWS][TILE_ROWS]={};
-  markOldSweepTiles(angle,dirty);
-  uint16_t tile[TILE_SIZE*TILE_SIZE];
-  for(int ty=0;ty<TILE_ROWS;ty++)for(int tx=0;tx<TILE_ROWS;tx++){
-    if(!dirty[ty][tx])continue;
-    int x=tx*TILE_SIZE,y=ty*TILE_SIZE;
-    for(int row=0;row<TILE_SIZE;row++){
-      memcpy(tile+row*TILE_SIZE,background+(y+row)*240+x,TILE_SIZE*sizeof(uint16_t));
-    }
-    display.drawRGBBitmap(x,y,tile,TILE_SIZE,TILE_SIZE);
-  }
-}
-void drawMovingSweep(Adafruit_GC9A01A &display,float sweep){
+void drawMovingSweep(Adafruit_GC9A01A &display,float sweep,bool erase=false){
   for(int k=SWEEP_RAYS-1;k>=0;k--){
-    float angle=sweep-k*0.012f;
-    uint16_t shade=(k==0?0x07E0:(k<4?0x05C0:(k<10?0x0300:0x0180)));
+    float angle=sweep-k*0.022f;
+    uint16_t shade=erase?0x0000:(k==0?0x07E0:(k<3?0x05C0:(k<7?0x0300:0x0180)));
     display.drawLine(120,120,lroundf(120+SWEEP_LENGTH*sinf(angle)),
                      lroundf(120-SWEEP_LENGTH*cosf(angle)),shade);
   }
@@ -751,29 +748,24 @@ void renderRadar(const Config &c){
   uint32_t now=millis();
   bool connected=WiFi.status()==WL_CONNECTED;
   bool sceneRefresh=radarSceneDirty || lastRadarDisplay!=&display ||
-     (now-lastRadarScene>30000UL) || connected!=lastWifiState || apMode!=lastApState;
+    (now-lastRadarScene>30000UL) || connected!=lastWifiState || apMode!=lastApState;
   if(sceneRefresh){
-    // First record the update so changes arriving during the drawing are not lost.
     radarSceneDirty=false;
     lastRadarDisplay=&display;
     lastWifiState=connected;
     lastApState=apMode;
     lastRadarScene=now;
-    Adafruit_GFX &t=drawingSurface(display);
-    drawRadarBackground(c,t);
-    showFrame(display);
+    drawRadarBackground(c,display,true);
     previousSweepValid=false;
-    if(!frameBuffer.getBuffer()){
-      // Low-memory fallback: static radar is preferable to the old strobe.
-      Serial.println("[Radar] Insufficient heap for background; animation disabled");
-    }
   }
-  // Without enough RAM for a background there is no safe way to erase an old
-  // sweep without destroying airport/aircraft markings. Do not flash the TFT.
-  if(!frameBuffer.getBuffer())return;
   float sweep=fmodf((now%11000UL)*360.0f/11000.0f,360.0f)*DEG2RAD;
-  if(previousSweepValid)restoreOldSweep(display,previousSweep);
-  drawMovingSweep(display,sweep);
+  if(previousSweepValid){
+    // Remove only the previously drawn sweep, then restore background features
+    // crossing that narrow wedge. Never clear the entire display here.
+    drawMovingSweep(display,previousSweep,true);
+    drawRadarBackground(c,display,false);
+  }
+  drawMovingSweep(display,sweep,false);
   previousSweep=sweep;
   previousSweepValid=true;
 }
@@ -789,7 +781,7 @@ void renderBoot(){
 void setup(){
   Serial.begin(115200);delay(250);
   guard=xSemaphoreCreateMutex();loadPrefs();
-  Serial.printf("[Graphics] Framebuffer: %s, free heap: %u\n",frameBuffer.getBuffer()?"ready":"allocation FAILED",ESP.getFreeHeap());
+  Serial.printf("[Graphics] Direct sweep (no full-screen buffer), free heap: %u\n",ESP.getFreeHeap());
   SPI.begin(18,19,23,-1); // Shared VSPI: SCK=18, MISO=19 (unused), MOSI=23.
   // Guard each chip select against both displays selecting the bus during boot.
   pinMode(PIN_RADAR_CS,OUTPUT);pinMode(PIN_CLOCK_CS,OUTPUT);
