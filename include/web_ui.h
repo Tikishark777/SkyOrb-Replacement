@@ -1,36 +1,151 @@
 #pragma once
 #include <Arduino.h>
 
-static const char PAGE_HTML[] PROGMEM = R"SKYHTML(
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SkyOrb • Radar + Clock</title>
+// Mobile-first cockpit portal inspired by the original SkyOrb presentation.
+// All interactive endpoints are served by the ESP32 itself. No cloud UI host.
+static const char PAGE_HTML[] PROGMEM = R"SKYPORTAL(
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyOrb | Flight Radar</title>
 <style>
-:root{--accent:#32d9bc;--bg:#07151b;--panel:#0d252c;--line:#21444c;--text:#d9f9f7}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:960px;padding:18px;margin:auto}h1{font-size:26px;margin:8px 0 4px}h2{font-size:18px;margin-top:4px}.muted,small{color:#a4c5c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin:12px 0}label{display:block;margin-top:12px;color:#d1e7e7;font-size:13px}input,select{display:block;width:100%;background:#091c22;color:white;border:1px solid #385761;padding:11px;margin-top:5px;border-radius:8px;font:inherit}input[type=color]{height:44px;padding:2px}input[type=checkbox]{display:inline;width:auto}button{background:var(--accent);border:none;color:#041a20;font-weight:bold;padding:11px 15px;border-radius:8px;cursor:pointer;margin:6px 4px 5px 0}button.secondary{background:#274b54;color:white}.banner{border:1px solid var(--line);border-radius:8px;padding:11px;word-break:break-word}.flex{display:flex;gap:12px}.flex>*{flex:1;min-width:0}#scope{width:100%;max-width:400px;display:block;margin:5px auto;aspect-ratio:1}#flights{max-height:300px;overflow:auto}#flights a{display:flex;justify-content:space-between;gap:8px;padding:9px 2px;color:var(--accent);border-bottom:1px solid var(--line);text-decoration:none}.tag{display:inline-block;border:1px solid var(--line);border-radius:14px;padding:4px 9px;margin:3px}.warn{color:#ffd18a}.danger{background:#a54848;color:white}</style>
-</head><body><main><h1>◉ SkyOrb</h1><div class="muted">Live flight radar + desk clock · community replacement firmware</div><div class="card banner" id="state">Connecting to SkyOrb…</div>
-<div class="grid"><section class="card"><h2>Live radar</h2><canvas id="scope" width="400" height="400"></canvas><div id="flights" class="muted">Loading aircraft…</div><small>Aircraft: <a href="https://www.adsb.lol/">ADSB.lol</a> / <a href="https://opendata.adsb.fi/">ADSB.fi</a> · Airfields: © OpenStreetMap contributors</small></section>
-<section class="card"><h2>Location and clock</h2><p class="muted">Set your address once or enter latitude and longitude manually. Saved on the device.</p><div class="flex"><div><label>Find address (optional)<input id="address" autocomplete="street-address" placeholder="City or street address"></label></div></div><button class="secondary" type="button" onclick="geocode()">Find address</button>
-<form id="settings" action="/save" method="post"><div class="flex"><label>Latitude<input name="lat" id="lat" type="number" min="-90" max="90" step="0.000001" required></label><label>Longitude<input name="lon" id="lon" type="number" min="-180" max="180" step="0.000001" required></label></div><label>Radar radius, miles (5–30)<input name="radius" id="radius" type="number" min="5" max="30" step="1" required></label><label>Clock format<select name="clock24" id="clock24"><option value="0">12-hour (AM / PM)</option><option value="1">24-hour</option></select></label><label>Portal accent color<input type="color" id="accent" name="accent" value="#32d9bc"></label><label><input type="checkbox" id="swap" name="swap" value="1"> Swap which physical display shows clock / radar</label><label>Fallback UTC offset in hours (only if timezone lookup fails)<input name="fallback" id="fallback" type="number" min="-12" max="14" step="0.5" value="0"></label><button type="submit">Save location and settings</button></form><p id="geoStatus" class="muted"></p>
-</section></div>
-<div class="grid"><section class="card"><h2>Airports</h2><p class="muted">Discover nearby airports through OpenStreetMap or add your own markers.</p><button onclick="autoAirports()">Auto-find airports</button><p id="airportStatus" class="muted"></p><div id="airports"></div><form action="/airport/add" method="post"><div class="flex"><label>Code<input name="name" maxlength="8" placeholder="SEA" required></label><label>Latitude<input name="lat" type="number" step="any" min="-90" max="90" required></label><label>Longitude<input name="lon" type="number" step="any" min="-180" max="180" required></label></div><button class="secondary">Add airport</button></form></section>
-<section class="card"><h2>Network</h2><p id="netInfo" class="muted"></p><p>If setting up Wi-Fi for the first time, connect to the <b>SKYORB-Setup</b> network and open <b>192.168.4.1</b>.</p><form action="/wifi" method="post"><label>Wi-Fi network name<input name="ssid" maxlength="32" id="ssid" autocomplete="off" required></label><label>Wi-Fi password<input name="password" type="password" maxlength="63" autocomplete="new-password"></label><button class="secondary">Save Wi-Fi and restart</button></form><form action="/wifi/reset" method="post" onsubmit="return confirm('Remove Wi-Fi credentials and restart into setup mode?')"><button class="danger">Reset Wi-Fi only</button></form><p class="muted">Connected to your own trusted Wi-Fi? Visit <a href="http://skyorb.local">skyorb.local</a>. If that name fails, use the IP on the screen.</p></section></div>
-<footer class="muted">Personal, non-commercial project. Flight data can be delayed or unavailable. Not for navigation or safety decisions.</footer></main>
-<script>
-let aircraft=[], airports=[], rad=30,lat=0,lon=0,ready=false, palette='#32d9bc';const $=x=>document.getElementById(x);const canvas=$('scope'),g=canvas.getContext('2d');
-function setupColor(v){if(/^#[0-9a-f]{6}$/i.test(v||'')){palette=v;document.documentElement.style.setProperty('--accent',v)}}
-function safe(s){return String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]))}
-async function api(url,options){let r=await fetch(url,options);let d=await r.json();if(!r.ok||d.error)throw Error(d.error||('HTTP '+r.status));return d}
-async function loadConfig(){try{let c=await api('/api/config');$('lat').value=c.lat;$('lon').value=c.lon;$('radius').value=c.radius;$('clock24').value=c.clock24?'1':'0';$('swap').checked=!!c.swap;$('fallback').value=c.fallback;setupColor(c.accent);$('accent').value=c.accent;$('ssid').value=c.ssid||'';lat=c.lat;lon=c.lon;rad=c.radius;ready=c.locationSet;airports=c.airports||[];drawAirports();}catch(e){console.log(e)}}
-function drawAirports(){$('airports').innerHTML=airports.length?airports.map((a,i)=>`<div class="tag">${safe(a.name)} <button class="secondary" style="padding:3px 7px;margin:0" onclick="removeAirport(${i})">×</button></div>`).join(''):'<small>No airports saved.</small>'}
-async function removeAirport(i){try{await api('/airport/delete?i='+i,{method:'POST'});await loadConfig()}catch(e){alert(e.message)}}
-async function autoAirports(){$('airportStatus').textContent='Looking up airports; this may take a little while…';try{let d=await api('/airport/auto',{method:'POST'});$('airportStatus').textContent=d.message||'Requested';setTimeout(loadConfig,10000)}catch(e){$('airportStatus').textContent=e.message}}
-async function geocode(){let q=$('address').value.trim();if(!q)return;$('geoStatus').textContent='Searching OpenStreetMap…';try{let d=await api('/api/geocode?q='+encodeURIComponent(q));$('lat').value=d.lat;$('lon').value=d.lon;$('geoStatus').textContent='Location found. Tap Save location and settings.';}catch(e){$('geoStatus').textContent=e.message}}
-async function refresh(){try{const d=await api('/api/live');aircraft=d.flights||[];airports=d.airports||airports;lat=d.lat;lon=d.lon;rad=d.radius;ready=d.locationSet;const age=d.ageSeconds<0?'not yet':d.ageSeconds+'s ago';$('state').innerHTML=`<b>${safe(d.status)}</b><br><small>Source: ${safe(d.source||'none')} · ${d.count} aircraft · update ${age} · ${safe(d.timezone)} · ${safe(d.ip)}</small>`;$('netInfo').textContent='IP: '+d.ip+' · Wi-Fi: '+d.wifi+' · timezone: '+d.timezone;$('flights').innerHTML=aircraft.length?aircraft.map(a=>`<a target="_blank" rel="noopener" href="${frLink(a)}"><span>${safe(a.flight||a.hex||'Unknown')} <small>${safe(a.reg||'')}</small></span><span>${a.ground?'GROUND':(a.altitude+' ft')} ↗</span></a>`).join(''):'No aircraft in the latest data. Check status and your location.';drawAirports();}catch(e){$('state').textContent='Connection error: '+e.message}}
-function frLink(a){let s=(a.flight||'').trim();if(s&&/^[a-z0-9-]+$/i.test(s))return 'https://www.flightradar24.com/data/flights/'+encodeURIComponent(s.toLowerCase());if(a.reg&&/^[a-z0-9-]+$/i.test(a.reg))return 'https://www.flightradar24.com/data/aircraft/'+encodeURIComponent(a.reg.toLowerCase());return 'https://www.flightradar24.com/'}
-const toXY=(a)=>{let x=(a.lon-lon)*Math.cos(lat*Math.PI/180)*60,y=(a.lat-lat)*60;let max=rad/1.15078;return [200+x/max*168,200-y/max*168]};
-function paint(t){g.fillStyle='#061317';g.fillRect(0,0,400,400);g.strokeStyle='#225158';g.lineWidth=1;[55,110,168].forEach(r=>{g.beginPath();g.arc(200,200,r,0,Math.PI*2);g.stroke()});g.beginPath();g.moveTo(200,25);g.lineTo(200,375);g.moveTo(25,200);g.lineTo(375,200);g.stroke();g.fillStyle=palette;g.font='13px monospace';g.fillText('N',196,20);g.fillText('S',196,390);g.fillText('W',12,204);g.fillText('E',382,204);
-const angle=t/1400,px=200+168*Math.sin(angle),py=200-168*Math.cos(angle);g.strokeStyle=palette;g.lineWidth=2;g.beginPath();g.moveTo(200,200);g.lineTo(px,py);g.stroke();
-for(const a of airports){const [x,y]=toXY(a);if(Math.hypot(x-200,y-200)>174)continue;g.fillStyle='#e7bf69';g.fillRect(x-3,y-3,6,6);g.font='11px monospace';g.fillText(a.name,x+6,y-5)}
-for(const a of aircraft){const [x,y]=toXY(a);if(Math.hypot(x-200,y-200)>174)continue;const theta=(Math.atan2(x-200,200-y)+Math.PI*2)%(Math.PI*2),delta=Math.abs(Math.atan2(Math.sin(theta-angle),Math.cos(theta-angle)));g.fillStyle=delta<0.23?'#fff8b0':palette;g.beginPath();g.arc(x,y,delta<0.23?5:3,0,Math.PI*2);g.fill();g.font='11px monospace';g.fillText((a.flight||a.hex||'').slice(0,9),x+6,y-6)}requestAnimationFrame(paint)}
-canvas.addEventListener('click',e=>{const rect=canvas.getBoundingClientRect(),x=(e.clientX-rect.left)*400/rect.width,y=(e.clientY-rect.top)*400/rect.height;let hits=aircraft.map(a=>({a,d:Math.hypot(toXY(a)[0]-x,toXY(a)[1]-y)})).sort((a,b)=>a.d-b.d);if(hits.length&&hits[0].d<20)window.open(frLink(hits[0].a),'_blank','noopener')});
-$('accent').addEventListener('input',e=>setupColor(e.target.value));loadConfig().then(refresh);setInterval(refresh,10000);requestAnimationFrame(paint);
+:root{--accent:#ff9200;--bg:#070707;--panel:#1a1a1a;--edge:#3e3e3e;--dim:#969696;--fg:#d3d3d3}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 'Courier New',monospace}button,input,select{font:inherit}
+a{color:var(--accent)}a:hover{text-decoration:underline}button{cursor:pointer;touch-action:manipulation}button:disabled{opacity:.6;cursor:wait}
+main{max-width:960px;padding:12px 16px 60px;margin:0 auto}header{text-align:center;padding:22px 5px 20px}header h1{margin:0;color:var(--accent);font-size:clamp(27px,5.3vw,45px);font-weight:400;letter-spacing:.17em}header .sub{letter-spacing:.27em;color:#898989;font-size:clamp(11px,2vw,15px)}
+.card{background:var(--panel);border:1px solid var(--edge);border-radius:19px;padding:22px 24px;margin:16px 0 21px}
+h2{font-size:18px;letter-spacing:.24em;color:#e0e0e0;margin:0 0 25px;padding-bottom:14px;border-bottom:1px solid var(--accent)}h3{font-size:15px;color:#ccc;letter-spacing:.12em}
+label,.label{display:block;letter-spacing:.13em;font-size:14px;color:#9d9d9d;margin:14px 0 5px}
+input,select{background:#070707;color:var(--accent);border:1px solid #545454;border-radius:8px;padding:11px 12px;min-height:48px;width:100%;font-size:17px;outline-offset:2px}
+input[type=text].bright{background:#f9f9f9;color:#181818}input:focus,select:focus{border-color:var(--accent)}input[type=checkbox]{width:auto;min-height:auto}
+button.action{width:100%;margin:12px 0;padding:13px 10px;min-height:55px;border:2px solid var(--accent);background:transparent;color:var(--accent);border-radius:8px;letter-spacing:.15em;text-transform:uppercase;font-size:15px}
+button.action:hover,button.action:focus-visible{background:#2d2111}
+button.danger{border-color:#ff4249;color:#ff4249}button.danger:hover{background:#361719}
+button.tiny{width:auto;min-width:40px;min-height:36px;border:1px solid #fb535d;color:#fb535d;background:transparent;border-radius:7px}
+button.pick{border:1px solid #555;background:#080808;color:#aaa;min-height:47px;border-radius:8px;width:100%}button.pick.active{color:var(--accent);background:#2b1c0b;border-color:var(--accent)}
+.flex{display:flex;gap:12px;align-items:flex-end}.flex>*{flex:1;min-width:0}.buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:7px 0 22px}.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.note{font-size:14px;color:#999;line-height:1.6}.info{margin:14px 0;padding:12px 14px;color:#aaa;background:#101010;border:1px solid #454545;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere}.info.ok{color:#c4efca;border-color:#2a5738}.info.error{color:#ffc9c7;border-color:#8a343a}
+#scope{width:100%;max-width:640px;aspect-ratio:1;display:block;margin:0 auto;background:#050b06;cursor:crosshair}
+.scopebox{margin:0 auto;max-width:650px}.count{font-size:16px;text-align:center;letter-spacing:.12em;margin:12px 0 17px}.count b{color:var(--accent);font-size:38px;font-weight:400}
+.airportRow,.flightRow{display:grid;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid #383838}.airportRow{grid-template-columns:1fr 1.5fr auto}.flightRow{grid-template-columns:minmax(0,1.2fr) 1fr 1fr auto;text-decoration:none;color:#b1b1b1}.flightRow:hover{color:#eee}.flightRow .call{color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hint{font-size:13px;color:#9d9d9d}.under{padding-bottom:14px;border-bottom:1px solid #454545;margin-bottom:18px}.selectColor{appearance:none;min-width:44px;width:44px;height:44px;border-radius:100%;border:0;box-shadow:0 0 0 2px transparent;cursor:pointer}.selectColor.on{box-shadow:0 0 0 3px white,0 0 10px 6px #ffffff23}
+.colors{display:flex;gap:19px;align-items:center;margin:10px 0 15px}.radioLine{display:flex;gap:9px;align-items:center}.radioLine input{width:auto;height:auto;min-height:auto}details{margin-top:15px}summary{cursor:pointer;color:var(--accent)}.tag{font-size:12px;border:1px solid #666;border-radius:5px;padding:3px 7px;color:#ccc}.statusLine{margin:5px 0 9px;color:var(--accent);font-size:14px}
+@media(max-width:580px){.card{padding:20px 16px}.airportRow{grid-template-columns:1fr 1.5fr auto;font-size:13px}.flightRow{grid-template-columns:1fr 1fr 1fr;font-size:12px}.flightRow span:nth-child(4){display:none}main{padding:8px 9px 45px}h2{font-size:16px}header h1{letter-spacing:.1em}.buttons{gap:7px}}
+</style></head>
+<body><main><header><h1>✈ FLIGHT RADAR</h1><div class="sub">ESP32 · SkyOrb · ADS-B</div></header>
+<section class="card"><h2>LIVE RADAR</h2><div class="scopebox"><canvas id="scope" width="640" height="640" aria-label="Live aircraft radar"></canvas></div>
+<p class="count"><b id="count">0</b> aircraft in range</p><p class="note" style="text-align:center">Tap a flight below to look it up on FlightRadar24.</p><div id="flights"></div><div class="info" id="feedStatus">Waiting for aircraft data...</div></section>
+<section class="card" id="location"><h2>SEARCH CENTER</h2><label for="address">ADDRESS OR PLACE</label>
+<div class="flex"><input id="address" class="bright" type="text" placeholder="City, state or street address" aria-label="Address or place"><button class="pick" id="lookup" type="button" style="flex:0 0 64px">🔍</button></div>
+<div class="statusLine" id="geoStatus">Type a location and select search.</div>
+<form id="settings"><div class="two"><div><label for="lat">LATITUDE</label><input name="lat" id="lat" type="number" step="any" min="-90" max="90" required placeholder="0.0000"></div>
+<div><label for="lon">LONGITUDE</label><input name="lon" id="lon" type="number" step="any" min="-180" max="180" required placeholder="0.0000"></div></div>
+<p class="note">If an address isn't found, you can enter coordinates manually (Google Maps shows them when you select a location).</p>
+<div class="label">SEARCH RADIUS</div><div class="buttons" id="ranges"><button class="pick" type="button" data-r="5">5</button><button class="pick" type="button" data-r="10">10</button><button class="pick active" type="button" data-r="20">20</button><button class="pick" type="button" data-r="30">30</button></div>
+<div class="statusLine" style="text-align:center">MILES</div><input type="hidden" name="radius" id="radius" value="20"><input name="accent" id="accent" type="hidden" value="#ff9200">
+<input type="hidden" name="fallback" value="0"><input type="hidden" name="clock24" id="clock24" value="1"><input type="hidden" name="swap" id="swap" value="0" disabled>
+<button class="action" type="submit">▶ Apply location</button><div id="saveStatus" class="info">Set a location to start tracking aircraft.</div>
+<p class="note">The clock shows UTC until SkyOrb can determine your time zone from the saved location. Daylight saving is refreshed automatically.</p>
+<div class="label">CLOCK FORMAT</div><div class="two"><button class="pick active" type="button" id="format24">24-hour</button><button class="pick" type="button" id="format12">12-hour</button></div>
+<details><summary>Advanced display options</summary><label class="radioLine"><input type="checkbox" id="swapper"> Swap clock and radar physical screens</label>
+<label>Fallback UTC offset (hours)<input id="fallback" type="number" step="0.5" min="-12" max="14" value="0"></label><p class="note">Use only if automatic timezone lookup fails.</p></details>
+</form></section>
+<section class="card" id="airportsCard"><h2>AIRPORTS</h2><div id="airports"><p class="note">No airport markers saved yet.</p></div>
+<button class="action" id="airportAuto" type="button">🌎 Find commercial airports nearby</button>
+<button class="action danger" id="airportClear" type="button">× Remove all airports</button>
+<div class="under"></div><div class="label">ICAO OR IATA CODE</div><input id="airportCode" type="text" maxlength="4" placeholder="Example: KSEA or SEA">
+<button class="action" id="airportByCode" type="button">▶ Find and add airport</button>
+<details><summary>Advanced: add airport by coordinates</summary><form id="airportForm"><div class="two"><div><label>ICAO / IATA<input name="name" required maxlength="8" placeholder="KSEA"></label></div><div></div>
+<div><label>LATITUDE<input name="lat" type="number" step="any" required></label></div><div><label>LONGITUDE<input name="lon" type="number" step="any" required></label></div></div><button type="submit" class="action">Add airport manually</button></form></details>
+<div id="airportStatus" class="info">Airport discovery becomes available after saving a location and connecting to Wi-Fi.</div></section>
+<section class="card"><h2>NETWORK</h2><div id="networkStatus" class="info">Checking Wi-Fi connection...</div>
+<p><a href="/setup">Configure WiFi / Network scan / Info</a></p><button type="button" id="resetWifi" class="action danger">⚠ Reset Wi-Fi</button>
+<p class="note">Reset Wi-Fi clears the network credentials and reopens the SKYORB-Setup hotspot. Other SkyOrb settings are retained.</p>
+<details><summary>Firmware updates</summary><p class="note">Set an 8–48 character administrator update password while connected to SKYORB-Setup. Firmware upload requires this password and the username <b>admin</b>.</p>
+<form id="adminForm"><label>Current password (only for changing an existing one)<input type="password" name="current" autocomplete="off"></label>
+<label>New update password<input type="password" name="newpass" required minlength="8" maxlength="48"></label><button class="action" type="submit">Save update password</button></form>
+<a href="/update">Open local firmware-update page</a><div id="adminStatus" class="statusLine"></div></details>
+<p class="note">To recover an unreachable device, unplug and replug it; SKYORB-Setup reopens temporarily. Avoid uploading firmware while the device is in use.</p></section>
+<section class="card"><h2>APPEARANCE</h2><div class="label">PORTAL THEME COLOR</div><div id="colors" class="colors">
+<button class="selectColor on" type="button" data-c="#ff9200" aria-label="Orange" style="background:#ff9200"></button>
+<button class="selectColor" type="button" data-c="#1dc653" aria-label="Green" style="background:#1dc653"></button>
+<button class="selectColor" type="button" data-c="#2b9bfa" aria-label="Blue" style="background:#2b9bfa"></button>
+<button class="selectColor" type="button" data-c="#ff3e43" aria-label="Red" style="background:#ff3e43"></button></div>
+<p class="note">Changes the accent color of this control page. The physical radar remains green, just like the original SkyOrb.</p></section>
+<footer class="note">SkyOrb community replacement • Flight data: <a href="https://adsb.lol/">ADSB.lol</a> and <a href="https://adsb.fi/">ADSB.fi</a> • Airport/address data: © OpenStreetMap contributors • For hobby use only, not navigation.</footer>
+</main><script>
+const $=id=>document.getElementById(id),C=$('scope'),g=C.getContext('2d');
+let flights=[],airports=[],rad=20,lat=0,lon=0,locSet=false,connected=false,palette='#ff9200';
+let last=0,lastStatus='';
+const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function msg(id,s,err=false){let e=$(id);e.textContent=s;e.classList.toggle('error',!!err);e.classList.toggle('ok',!err);}
+async function api(url,options){let r=await fetch(url,options),txt=await r.text();let x;try{x=JSON.parse(txt)}catch(e){throw Error('Unexpected reply (HTTP '+r.status+')')}if(!r.ok||x.error)throw Error(x.error||('HTTP '+r.status));return x;}
+function setRange(n){rad=Number(n);$('radius').value=n;for(let b of $('ranges').querySelectorAll('button'))b.classList.toggle('active',Number(b.dataset.r)===rad);}
+function setClock(v){$('clock24').value=v?'1':'0';$('format24').classList.toggle('active',v);$('format12').classList.toggle('active',!v);}
+function setPalette(v){if(!/^#[a-f\d]{6}$/i.test(v||''))return;palette=v;document.documentElement.style.setProperty('--accent',v);$('accent').value=v;
+for(let b of $('colors').querySelectorAll('button'))b.classList.toggle('on',b.dataset.c.toLowerCase()===v.toLowerCase());}
+async function config(){try{let d=await api('/api/config');$('lat').value=d.locationSet?d.lat:'';$('lon').value=d.locationSet?d.lon:'';
+locSet=!!d.locationSet;lat=d.lat;lon=d.lon;setRange(d.radius||20);setClock(!!d.clock24);$('swapper').checked=!!d.swap;
+$('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');airports=d.airports||[];drawAirports();
+msg('saveStatus',locSet?'Location saved: '+lat.toFixed(4)+', '+lon.toFixed(4):'No location saved yet. Search an address or enter coordinates, then Apply.');
+}catch(e){msg('saveStatus','Could not load settings: '+e.message,true)}}
+function drawAirports(){let e=$('airports');e.replaceChildren();if(!airports.length){e.textContent='No airports saved.';return;}for(let i=0;i<airports.length;i++){
+let a=airports[i],row=document.createElement('div');row.className='airportRow';let name=document.createElement('span');name.textContent=a.name;
+let coords=document.createElement('span');coords.textContent=a.lat.toFixed(3)+', '+a.lon.toFixed(3);
+let del=document.createElement('button');del.type='button';del.textContent='×';del.className='tiny';del.ariaLabel='Remove '+a.name;
+del.onclick=()=>deleteAirport(i);row.append(name,coords,del);e.append(row);}}
+async function deleteAirport(i){try{await api('/airport/delete?i='+i,{method:'POST'});await config();msg('airportStatus','Airport removed.');}catch(e){msg('airportStatus',e.message,true)}}
+$('lookup').onclick=async()=>{let q=$('address').value.trim();if(!q){msg('geoStatus','Enter an address or place first.',true);return}
+msg('geoStatus','Searching for location...');try{let d=await api('/api/geocode?q='+encodeURIComponent(q));$('lat').value=d.lat.toFixed(5);$('lon').value=d.lon.toFixed(5);
+msg('geoStatus','✓ Coordinates found. Press APPLY to save the radar location.');}catch(e){msg('geoStatus','Address lookup unavailable: '+e.message,true)}};
+$('address').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('lookup').click();}};
+for(let b of $('ranges').querySelectorAll('button'))b.onclick=()=>setRange(b.dataset.r);
+$('format24').onclick=()=>setClock(true);$('format12').onclick=()=>setClock(false);
+$('settings').onsubmit=async e=>{e.preventDefault();let f=new URLSearchParams(new FormData($('settings')));f.set('swap',$('swapper').checked?'1':'0');
+// Checkbox is sent only if selected so that the ESP32 can correctly clear it.
+if(!$('swapper').checked)f.delete('swap');f.set('fallback',$('fallback').value);
+msg('saveStatus','Saving location...');try{let d=await api('/save',{method:'POST',body:f});await config();msg('saveStatus','✓ '+(d.message||'Location saved.'));await refresh();}
+catch(e){msg('saveStatus','Save failed: '+e.message,true)}};
+$('airportAuto').onclick=async()=>{if(!locSet){msg('airportStatus','Set your radar location first.',true);return}msg('airportStatus','Searching for nearby airports (may take up to 30 seconds)...');
+try{await api('/airport/auto',{method:'POST'});setTimeout(async()=>{await config();msg('airportStatus',airports.length?'Found '+airports.length+' airport markers.':'No airports returned yet. Try again later.');},22000);}catch(e){msg('airportStatus',e.message,true)}};
+$('airportByCode').onclick=async()=>{let code=$('airportCode').value.trim().toUpperCase();if(!/^[A-Z0-9]{3,4}$/.test(code)){msg('airportStatus','Use an IATA or ICAO airport code (3–4 characters).',true);return}
+msg('airportStatus','Finding airport '+code+'...');try{let d=await api('/airport/code',{method:'POST',body:new URLSearchParams({code})});await config();msg('airportStatus',d.message||'Airport added.');}
+catch(e){msg('airportStatus',e.message,true)}};
+$('airportForm').onsubmit=async e=>{e.preventDefault();try{let r=await fetch('/airport/add',{method:'POST',body:new URLSearchParams(new FormData($('airportForm')))});
+if(!r.ok)throw Error('Manual airport save failed');await config();msg('airportStatus','Airport saved.');}catch(err){msg('airportStatus',err.message,true)}};
+$('airportClear').onclick=async()=>{if(!confirm('Remove all saved airport markers?'))return;try{await api('/airport/clear',{method:'POST'});await config();msg('airportStatus','All airports removed.');}catch(e){msg('airportStatus',e.message,true)}};
+$('resetWifi').onclick=async()=>{if(!confirm('Clear your saved Wi-Fi and return to SKYORB-Setup?'))return;try{let r=await fetch('/wifi/reset',{method:'POST'});if(!r.ok)throw Error('Wi-Fi reset failed');msg('networkStatus','Wi-Fi credentials cleared. Connect to SKYORB-Setup (SKYORB1234) and open 192.168.4.1.');}catch(e){msg('networkStatus',e.message,true)}};
+$('adminForm').onsubmit=async e=>{e.preventDefault();try{let d=await api('/admin/password',{method:'POST',body:new URLSearchParams(new FormData($('adminForm')))});msg('adminStatus',d.message);$('adminForm').reset();}
+catch(err){msg('adminStatus',err.message,true)}};
+for(let b of $('colors').querySelectorAll('button'))b.onclick=async()=>{setPalette(b.dataset.c);try{await api('/theme',{method:'POST',body:new URLSearchParams({accent:b.dataset.c})});}
+catch(e){msg('networkStatus','Theme could not be saved: '+e.message,true)}};
+function frLink(a){let c=(a.flight||'').trim(),r=(a.reg||'').trim();if(/^[A-Z0-9-]+$/i.test(c)&&c.length)return 'https://www.flightradar24.com/data/flights/'+encodeURIComponent(c.toLowerCase());
+if(/^[A-Z0-9-]+$/i.test(r)&&r.length)return 'https://www.flightradar24.com/data/aircraft/'+encodeURIComponent(r.toLowerCase());return 'https://www.flightradar24.com/';}
+async function refresh(){try{let d=await api('/api/live');last=Date.now();connected=d.wifi==='connected';flights=d.flights||[];airports=d.airports||[];
+locSet=!!d.locationSet;lat=d.lat;lon=d.lon;rad=d.radius||20;let net=connected?'CONNECTED • '+d.homeIp:'DISCONNECTED';
+msg('networkStatus','Home Wi-Fi: '+net+'\nLocal address: http://'+(d.homeIp||'192.168.4.1')+'\nRecovery setup hotspot: '+(d.setupActive?'active (192.168.4.1)':'off')+'\nTimezone: '+d.timezone);
+msg('feedStatus',(d.source&&d.source!=='none'?'Source: '+d.source+' • ':'')+(d.status||'Waiting for aircraft feed')+' • HTTP '+d.httpCode);
+$('count').textContent=d.count||0;const list=$('flights');list.replaceChildren();if(!flights.length){list.textContent=locSet?'No aircraft reported right now.':'Choose a radar location below to start tracking.';return;}
+for(let a of flights){let row=document.createElement('a');row.className='flightRow';row.href=frLink(a);row.target='_blank';row.rel='noopener noreferrer';let name=document.createElement('span');name.className='call';name.textContent=a.flight||a.hex||'UNKNOWN';
+let fl=document.createElement('span');fl.textContent=a.ground?'GROUND':'FL'+String(Math.max(0,Math.round((a.altitude||0)/100))).padStart(3,'0');let speed=document.createElement('span');speed.textContent=Math.round(a.speed||0)+' kts';
+let deg=document.createElement('span');deg.textContent=Math.round(a.heading||0)+'°';row.append(name,fl,speed,deg);list.append(row);}
+}catch(e){msg('feedStatus','Cannot reach SkyOrb: '+e.message,true)}}
+function pos(a){let scale=Math.max(1,rad)*.868976,dx=(a.lon-lon)*60*Math.cos(lat*Math.PI/180),dy=(a.lat-lat)*60;
+return [320+dx/scale*281,320-dy/scale*281];}
+function sweep(ts){const S=640,R=282,theta=(ts/11000*2*Math.PI)%(Math.PI*2);g.fillStyle='#031006';g.fillRect(0,0,S,S);
+g.strokeStyle='#14401e';g.lineWidth=2;for(let r of [R/4,R/2,3*R/4,R]){g.beginPath();g.arc(320,320,r,0,2*Math.PI);g.stroke();}
+g.lineWidth=1;g.beginPath();g.moveTo(320,38);g.lineTo(320,602);g.moveTo(38,320);g.lineTo(602,320);g.stroke();
+for(let j=0;j<12;j++){let angle=j*Math.PI/6;g.beginPath();g.moveTo(320+R*Math.sin(angle),320-R*Math.cos(angle));g.lineTo(320+(R-10)*Math.sin(angle),320-(R-10)*Math.cos(angle));g.stroke();}
+g.fillStyle='#24e353';g.font='bold 17px monospace';g.textAlign='center';g.fillText('N',320,49);g.fillText('20 mi'.replace('20',String(rad)),320,609);
+for(let k=22;k>=0;k--){let a=theta-k*.010,alpha=(1-k/23)*.75;g.strokeStyle='rgba(28,255,63,'+alpha.toFixed(3)+')';g.lineWidth=3;
+g.beginPath();g.moveTo(320,320);g.lineTo(320+R*Math.sin(a),320-R*Math.cos(a));g.stroke();}
+for(let a of airports){let [x,y]=pos(a);if(Math.hypot(x-320,y-320)>R)continue;g.lineWidth=2;g.strokeStyle='#62c8ff';g.beginPath();g.arc(x,y,5,0,2*Math.PI);g.stroke();g.fillStyle='#e2e2e2';g.textAlign='left';g.font='15px monospace';g.fillText(a.name,x+8,y+13);}
+for(let a of flights){let [x,y]=pos(a);if(Math.hypot(x-320,y-320)>R)continue;let heading=(a.heading||0)*Math.PI/180;
+let ang=Math.atan2(x-320,320-y),diff=Math.abs(Math.atan2(Math.sin(ang-theta),Math.cos(ang-theta)));let col=diff<.25?'#c1ffeb':'#56b7ff';
+g.fillStyle=col;g.beginPath();g.moveTo(x+11*Math.sin(heading),y-11*Math.cos(heading));g.lineTo(x-7*Math.sin(heading)+5*Math.cos(heading),y+7*Math.cos(heading)+5*Math.sin(heading));g.lineTo(x-7*Math.sin(heading)-5*Math.cos(heading),y+7*Math.cos(heading)-5*Math.sin(heading));g.closePath();g.fill();
+g.textAlign='left';g.font='14px monospace';g.fillStyle='#f1dd83';g.fillText((a.flight||a.hex||'').slice(0,8),x+9,y-6);
+g.fillText(a.ground?'GND':'FL'+Math.max(0,Math.round((a.altitude||0)/100)),x+9,y+11);}
+requestAnimationFrame(sweep);}
+C.addEventListener('click',e=>{let b=C.getBoundingClientRect(),x=(e.clientX-b.left)*640/b.width,y=(e.clientY-b.top)*640/b.height;
+let items=flights.map(a=>({a,dist:Math.hypot(pos(a)[0]-x,pos(a)[1]-y)})).sort((a,b)=>a.dist-b.dist);if(items.length&&items[0].dist<25)window.open(frLink(items[0].a),'_blank','noopener');});
+config().then(refresh);setInterval(refresh,7000);requestAnimationFrame(sweep);
 </script></body></html>
-)SKYHTML";
+)SKYPORTAL";
