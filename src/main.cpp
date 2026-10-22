@@ -20,6 +20,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_GC9A01A.h>
 #include <Update.h>
+#include <esp_heap_caps.h>
+#include "airport_catalog.h"
 #include "web_ui.h"
 
 // Original SkyOrb pinout; the shared SPI bus is SCK=18, MOSI=23.
@@ -169,25 +171,6 @@ bool getJsonHTTPS(const String &url,JsonDocument &doc,int &code,JsonDocument *fi
   Serial.printf("[HTTP] %d %s\n",code,url.c_str());http.end();return false;
 }
 
-// Prefer a documented public Overpass mirror. The older default instance
-// frequently refuses automated requests, and TLS failure (-1) is not an
-// indication that there are no airports near the selected location.
-bool getOverpassJson(const String &query,JsonDocument &doc,int &lastCode){
-  const String encoded=urlEncode(query);
-  const char *hosts[]={
-    "https://overpass.private.coffee/api/interpreter?data=",
-    "https://lz4.overpass-api.de/api/interpreter?data="
-  };
-  for(const char *host:hosts){
-    int status=0;
-    doc.clear();
-    if(getJsonHTTPS(String(host)+encoded,doc,status)){lastCode=200;return true;}
-    lastCode=status;
-    Serial.printf("[Airport] Overpass endpoint failed (%d): %s\n",status,host);
-  }
-  return false;
-}
-
 void refreshTZ(){
   Config c=copyCfg();if(!c.locationSet||WiFi.status()!=WL_CONNECTED)return;
   String url="https://api.open-meteo.com/v1/forecast?latitude="+String(c.lat,5)+"&longitude="+String(c.lon,5)+"&current=temperature_2m&timezone=auto&forecast_days=1";
@@ -208,46 +191,53 @@ void refreshTZ(){
   xSemaphoreGive(guard);
 }
 
-// Auto-discover coded aerodromes from OSM; this is user-triggered or one time
-// after location is saved, not a repeated polling service.
+// Offline airport catalogue, generated from public-domain OurAirports data
+// during the PlatformIO build. No unreliable HTTPS requests during lookup.
+static float airportDistanceMiles(float lat,float lon,const Config &c){
+  const float dy=(lat-c.lat)*69.0f;
+  const float dx=(lon-c.lon)*69.0f*cosf(c.lat*DEG2RAD);
+  return sqrtf(dx*dx+dy*dy);
+}
+static bool airportCodeMatches(const AirportRecord &a,const String &code){
+  return code.equalsIgnoreCase(a.icao) ||
+         (a.iata[0] && code.equalsIgnoreCase(a.iata));
+}
 void discoverAirports(){
   Config c=copyCfg();
-  if(!c.locationSet){airportProgress(false,"Set radar location before searching for airports.");return;}
-  if(WiFi.status()!=WL_CONNECTED){airportProgress(false,"Connect SkyOrb to home Wi-Fi first.");return;}
-  airportProgress(true,"Searching nearby airports...");
-  int searchM=(int)(c.radius*1609.344f);
-  // Include ICAO-only airports as well as those with 3-letter IATA codes.
-  String around="(around:"+String(searchM)+","+String(c.lat,5)+","+String(c.lon,5)+")";
-  String query="[out:json][timeout:12];(nwr"+around+"[\"aeroway\"=\"aerodrome\"][\"iata\"];"
-               "nwr"+around+"[\"aeroway\"=\"aerodrome\"][\"icao\"];);out center 75;";
-  JsonDocument doc;int code=0;
-  if(!getOverpassJson(query,doc,code)){
-    airportProgress(false,"Airport discovery failed (HTTP "+String(code)+"). Check network or retry later.");
-    Serial.printf("[Airports] All endpoints failed: %d\n",code);
-    return;
+  if(!c.locationSet){airportProgress(false,"Save your radar location first.");return;}
+  airportProgress(true,"Finding nearby airports from the onboard catalogue...");
+  // Keep the nearest airports, rather than whichever happened to appear first
+  // in the data file. Scheduled airports break approximate distance ties.
+  struct Nearby {float distance;int index;};
+  Nearby best[MAX_AIRPORTS];int count=0;
+  for(size_t i=0;i<AIRPORT_CATALOG_COUNT;i++){
+    const AirportRecord &a=AIRPORT_CATALOG[i];
+    float lat=a.latE5*0.00001f,lon=a.lonE5*0.00001f;
+    float miles=airportDistanceMiles(lat,lon,c);
+    if(miles>c.radius)continue;
+    float rank=miles-(a.scheduled?0.08f:0.0f);
+    int at=0;while(at<count && rank>=best[at].distance)at++;
+    if(at>=MAX_AIRPORTS)continue;
+    if(count<MAX_AIRPORTS)count++;
+    for(int j=count-1;j>at;j--)best[j]=best[j-1];
+    best[at]={rank,(int)i};
   }
-  Airport found[MAX_AIRPORTS];int n=0;
-  for(JsonObject e:doc["elements"].as<JsonArray>()){
-    if(n>=MAX_AIRPORTS)break;
-    String name=cleanName(e["tags"]["iata"].as<String>(),8);
-    if(!name.length())name=cleanName(e["tags"]["icao"].as<String>(),8);
-    if(!name.length())continue;
-    float a=e["lat"].isNull()?e["center"]["lat"].as<float>():e["lat"].as<float>();
-    float o=e["lon"].isNull()?e["center"]["lon"].as<float>():e["lon"].as<float>();
-    if(a<-90||a>90||o<-180||o>180||(!a&&!o))continue;
-    bool duplicate=false;for(int j=0;j<n;j++)if(found[j].name==name)duplicate=true;
-    if(duplicate)continue;
-    found[n].name=name;found[n].lat=a;found[n].lon=o;n++;
-  }
-  if(n){
+  if(count){
     xSemaphoreTake(guard,portMAX_DELAY);
-    cfg.airportCount=n;for(int i=0;i<n;i++)cfg.airports[i]=found[i];
-    xSemaphoreGive(guard);shouldSave=true;radarSceneDirty=true;
-    airportProgress(false,"Found "+String(n)+" nearby airports.");
+    cfg.airportCount=count;
+    for(int i=0;i<count;i++){
+      const AirportRecord &a=AIRPORT_CATALOG[best[i].index];
+      cfg.airports[i].name=String(a.icao[0]?a.icao:a.iata);
+      cfg.airports[i].lat=a.latE5*0.00001f;
+      cfg.airports[i].lon=a.lonE5*0.00001f;
+    }
+    xSemaphoreGive(guard);
+    shouldSave=true;radarSceneDirty=true;
+    airportProgress(false,"Found "+String(count)+" airports within "+String(c.radius)+" miles (offline).");
   }else{
-    airportProgress(false,"No coded airports found within "+String(c.radius)+" miles. Try a larger radius or manual addition.");
+    airportProgress(false,"No airports in the onboard catalogue within "+String(c.radius)+" miles. Increase the radar radius or add coordinates manually.");
   }
-  Serial.printf("[Airports] Found %d airport markers\n",n);
+  Serial.printf("[Airports] %d of %u catalogue airports in range\n",count,(unsigned)AIRPORT_CATALOG_COUNT);
 }
 
 // Both providers expose readsb-style aircraft fields. ADSB.fi explicitly
@@ -348,6 +338,7 @@ void publishLive(){
   xSemaphoreTake(guard,portMAX_DELAY);
   d["airportLookupBusy"]=airportLookupBusy;
   d["airportLookupResult"]=airportLookupResult;
+  d["airportCatalogueCount"]=(unsigned)AIRPORT_CATALOG_COUNT;
   xSemaphoreGive(guard);
   JsonArray ar=d["airports"].to<JsonArray>();
   for(int i=0;i<c.airportCount;i++){
@@ -424,36 +415,33 @@ void onWifiReset(){
   WiFi.disconnect(false,false); // Keep SkyOrb-Setup accessible.
   if(!apMode)startSetupAP();
 }
-// Look up an IATA or ICAO airport code near the saved radar center.
-// The browser only needs a code; coordinates are discovered via OSM Overpass.
+// Match an ICAO or IATA airport identifier locally, independent of Wi-Fi.
 void onAirportCode(){
-  Config c=copyCfg();
-  if(!c.locationSet){errorJson("Save your radar location first.");return;}
-  if(WiFi.status()!=WL_CONNECTED){errorJson("Connect to home Wi-Fi in Step 1 before searching airports.",503);return;}
   String code=cleanName(server.arg("code"),4);
-  if(code.length()<3||code.length()>4){errorJson("Use a three-letter IATA or four-letter ICAO airport code.");return;}
-  for(size_t i=0;i<code.length();i++)if(!isalnum((unsigned char)code[i])){errorJson("Airport code must contain only letters and numbers.");return;}
-  String key=code.length()==3?"iata":"icao";
-  String query="[out:json][timeout:14];nwr(around:250000,"+String(c.lat,5)+","+String(c.lon,5)+")[\"aeroway\"=\"aerodrome\"][\""+key+"\"=\""+code+"\"];out center 1;";
-  JsonDocument doc;int status=0;
-  if(!getOverpassJson(query,doc,status)){
-    errorJson("Airport lookup service unavailable (HTTP " +String(status)+"). Please retry later, or add coordinates manually.",502);return;
+  if(code.length()<3||code.length()>4){errorJson("Enter a three-letter IATA or four-letter ICAO code.");return;}
+  for(size_t i=0;i<code.length();i++)if(!isalnum((unsigned char)code[i])){
+    errorJson("Airport codes may only contain letters and numbers.");return;
   }
-  JsonArray matches=doc["elements"].as<JsonArray>();
-  if(matches.isNull()||matches.size()==0){errorJson("No airport found with that code near your radar location. Try Auto-find nearby airports.",404);return;}
-  JsonObject item=matches[0];
-  float lat=item["lat"].isNull()?item["center"]["lat"].as<float>():item["lat"].as<float>();
-  float lon=item["lon"].isNull()?item["center"]["lon"].as<float>():item["lon"].as<float>();
-  if(lat<-90||lat>90||lon<-180||lon>180){errorJson("Airport coordinates were unavailable.",502);return;}
+  const AirportRecord *match=nullptr;
+  for(size_t i=0;i<AIRPORT_CATALOG_COUNT;i++){
+    if(airportCodeMatches(AIRPORT_CATALOG[i],code)){match=&AIRPORT_CATALOG[i];break;}
+  }
+  if(!match){
+    errorJson("Code not in the offline airport catalogue. Use Advanced: add airport by coordinates.",404);return;
+  }
+  String preferred=String(match->icao[0]?match->icao:match->iata);
   xSemaphoreTake(guard,portMAX_DELAY);
   for(int i=0;i<cfg.airportCount;i++){
-    if(cfg.airports[i].name==code){xSemaphoreGive(guard);errorJson("That airport is already saved.",409);return;}
+    if(cfg.airports[i].name==preferred){xSemaphoreGive(guard);errorJson("Airport already saved.",409);return;}
   }
-  if(cfg.airportCount>=MAX_AIRPORTS){xSemaphoreGive(guard);errorJson("Airport list is full.");return;}
-  Airport &a=cfg.airports[cfg.airportCount++];a.name=code;a.lat=lat;a.lon=lon;
-  xSemaphoreGive(guard);savePrefs();radarSceneDirty=true;
-  JsonDocument response;response["ok"]=true;response["message"]=String("Airport ")+code+" added.";
-  replyJson(response);
+  if(cfg.airportCount>=MAX_AIRPORTS){xSemaphoreGive(guard);errorJson("Airport list full. Remove an airport first.");return;}
+  Airport &a=cfg.airports[cfg.airportCount++];
+  a.name=preferred;a.lat=match->latE5*0.00001f;a.lon=match->lonE5*0.00001f;
+  xSemaphoreGive(guard);
+  savePrefs();radarSceneDirty=true;
+  JsonDocument reply;reply["ok"]=true;
+  reply["message"]=String("Added ")+preferred+" from the offline airport catalogue.";
+  replyJson(reply);
 }
 void onAirportAdd(){
   String name=cleanName(server.arg("name"),8);
@@ -723,51 +711,86 @@ void drawRadarBackground(const Config &c,Adafruit_GFX &t,bool clearDisplay=true)
   }
 }
 
-// Direct incremental sweep: no large framebuffer and no full-screen clear
-// during animation. Old rays are erased, permanent radar features are restored,
-// and new rays are drawn. This keeps aircraft visible even on low-memory boards.
-static constexpr int SWEEP_RAYS=10;
-static constexpr int SWEEP_LENGTH=100;
-static float previousSweep=0.0f;
-static bool previousSweepValid=false;
-static Adafruit_GC9A01A *lastRadarDisplay=nullptr;
-static uint32_t lastRadarScene=0;
-static bool lastWifiState=false;
-static bool lastApState=false;
+// Flicker-free radar rendering: a 240x240 RGB332 buffer is only 57,600 bytes.
+// Every frame is composed off-screen, including targets, labels, range rings
+// and sweep. Erasing the previous sweep is therefore never visible. The
+// GC9A01 receives RGB565 pixels in bounded eight-row stripes.
+//
+// We intentionally keep the existing Adafruit_GC9A01A driver/pinout. Changing
+// to a different project's TFT_eSPI configuration could disturb shared SPI.
+static constexpr int RADAR_SIZE=240, BLIT_ROWS=8;
+static uint8_t *radarPixels=nullptr;
+static uint16_t radarPalette[256];
+static uint16_t radarBlitRows[RADAR_SIZE*BLIT_ROWS];
+static bool radarMemoryWarningShown=false;
 
-void drawMovingSweep(Adafruit_GC9A01A &display,float sweep,bool erase=false){
+static uint8_t rgb565to332(uint16_t v){
+  return (uint8_t)(((v>>8)&0xE0)|((v>>6)&0x1C)|((v>>3)&0x03));
+}
+class RadarFrame8 : public Adafruit_GFX {
+public:
+  explicit RadarFrame8(uint8_t *p):Adafruit_GFX(RADAR_SIZE,RADAR_SIZE),pixels(p){}
+  void drawPixel(int16_t x,int16_t y,uint16_t color) override {
+    if(x<0||y<0||x>=RADAR_SIZE||y>=RADAR_SIZE)return;
+    pixels[y*RADAR_SIZE+x]=rgb565to332(color);
+  }
+  void fillScreen(uint16_t color) override {
+    memset(pixels,rgb565to332(color),RADAR_SIZE*RADAR_SIZE);
+  }
+private:
+  uint8_t *pixels;
+};
+static RadarFrame8 *radarCanvas=nullptr;
+static void initRadarBuffer(){
+  for(unsigned i=0;i<256;i++){
+    unsigned r3=(i>>5)&7, g3=(i>>2)&7, b2=i&3;
+    unsigned r5=(r3<<2)|(r3>>1), g6=(g3<<3)|g3;
+    unsigned b5=(b2<<3)|(b2<<1)|(b2>>1);
+    radarPalette[i]=(uint16_t)((r5<<11)|(g6<<5)|b5);
+  }
+  radarPixels=(uint8_t*)heap_caps_malloc(RADAR_SIZE*RADAR_SIZE,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  if(radarPixels)radarCanvas=new RadarFrame8(radarPixels);
+  Serial.printf("[Graphics] RGB332 canvas %s; free heap=%u largest block=%u\n",
+      radarCanvas?"READY":"NOT ALLOCATED",(unsigned)ESP.getFreeHeap(),
+      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+static void displayRadarFrame(Adafruit_GC9A01A &display){
+  for(int y=0;y<RADAR_SIZE;y+=BLIT_ROWS){
+    int rows=min(BLIT_ROWS,RADAR_SIZE-y);
+    for(int j=0;j<rows*RADAR_SIZE;j++){
+      radarBlitRows[j]=radarPalette[radarPixels[y*RADAR_SIZE+j]];
+    }
+    display.drawRGBBitmap(0,y,radarBlitRows,RADAR_SIZE,rows);
+  }
+}
+static void drawBufferedSweep(Adafruit_GFX &t,float sweep){
+  constexpr int SWEEP_RAYS=25, SWEEP_LENGTH=109;
   for(int k=SWEEP_RAYS-1;k>=0;k--){
-    float angle=sweep-k*0.022f;
-    uint16_t shade=erase?0x0000:(k==0?0x07E0:(k<3?0x05C0:(k<7?0x0300:0x0180)));
-    display.drawLine(120,120,lroundf(120+SWEEP_LENGTH*sinf(angle)),
-                     lroundf(120-SWEEP_LENGTH*cosf(angle)),shade);
+    float angle=sweep-k*0.018f;
+    unsigned brightness=(unsigned)(24+231*(SWEEP_RAYS-1-k)/(SWEEP_RAYS-1));
+    unsigned green6=(brightness*63)/255;
+    uint16_t col=(uint16_t)(green6<<5);
+    t.drawLine(120,120,lroundf(120+SWEEP_LENGTH*sinf(angle)),
+                  lroundf(120-SWEEP_LENGTH*cosf(angle)),col);
   }
 }
 void renderRadar(const Config &c){
   Adafruit_GC9A01A &display=radarScreen(c);
+  if(!radarCanvas){
+    // Fail safely and clearly: static scene, NOT flashing or ghosting rays.
+    if(!radarMemoryWarningShown || radarSceneDirty){
+      radarMemoryWarningShown=true;radarSceneDirty=false;
+      drawRadarBackground(c,display,true);
+      center(display,"RADAR BUFFER LOW",108,1,0xF800);
+    }
+    return;
+  }
   uint32_t now=millis();
-  bool connected=WiFi.status()==WL_CONNECTED;
-  bool sceneRefresh=radarSceneDirty || lastRadarDisplay!=&display ||
-    (now-lastRadarScene>30000UL) || connected!=lastWifiState || apMode!=lastApState;
-  if(sceneRefresh){
-    radarSceneDirty=false;
-    lastRadarDisplay=&display;
-    lastWifiState=connected;
-    lastApState=apMode;
-    lastRadarScene=now;
-    drawRadarBackground(c,display,true);
-    previousSweepValid=false;
-  }
-  float sweep=fmodf((now%11000UL)*360.0f/11000.0f,360.0f)*DEG2RAD;
-  if(previousSweepValid){
-    // Remove only the previously drawn sweep, then restore background features
-    // crossing that narrow wedge. Never clear the entire display here.
-    drawMovingSweep(display,previousSweep,true);
-    drawRadarBackground(c,display,false);
-  }
-  drawMovingSweep(display,sweep,false);
-  previousSweep=sweep;
-  previousSweepValid=true;
+  drawRadarBackground(c,*radarCanvas,true);
+  float sweep=(now%11000UL)*(2.0f*PI/11000.0f);
+  drawBufferedSweep(*radarCanvas,sweep);
+  displayRadarFrame(display);
+  radarSceneDirty=false;
 }
 
 void renderBoot(){
@@ -781,7 +804,7 @@ void renderBoot(){
 void setup(){
   Serial.begin(115200);delay(250);
   guard=xSemaphoreCreateMutex();loadPrefs();
-  Serial.printf("[Graphics] Direct sweep (no full-screen buffer), free heap: %u\n",ESP.getFreeHeap());
+  initRadarBuffer();
   SPI.begin(18,19,23,-1); // Shared VSPI: SCK=18, MISO=19 (unused), MOSI=23.
   // Guard each chip select against both displays selecting the bus during boot.
   pinMode(PIN_RADAR_CS,OUTPUT);pinMode(PIN_CLOCK_CS,OUTPUT);
@@ -805,7 +828,7 @@ void loop(){
   if(pendingRestart && (int32_t)(millis()-restartAfter)>0)ESP.restart();
   static uint32_t radarFrame=0,clockFrame=0, wifiCheck=0, disconnectedAt=0;
   uint32_t now=millis();
-  if(now-radarFrame>100){radarFrame=now;Config c=copyCfg();renderRadar(c);}
+  if(now-radarFrame>=70){radarFrame=now;Config c=copyCfg();renderRadar(c);}
   if(now-clockFrame>1000){clockFrame=now;Config c=copyCfg();renderClock(c);}
   if(pendingWifiConnect){
     pendingWifiConnect=false;
