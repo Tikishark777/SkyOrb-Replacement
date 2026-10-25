@@ -70,11 +70,62 @@ button.pick{border:1px solid #555;background:#080808;color:#aaa;min-height:47px;
 <button class="selectColor" type="button" data-c="#2b9bfa" aria-label="Blue" style="background:#2b9bfa"></button>
 <button class="selectColor" type="button" data-c="#ff3e43" aria-label="Red" style="background:#ff3e43"></button></div>
 <p class="note">Changes the accent color of this control page. The physical radar remains green, just like the original SkyOrb.</p></section>
+<section class="card" id="sweepCard"><h2>RADAR SWEEP</h2>
+<p class="note">Adjust the physical radar animation to your liking. Zero trail draws a single crisp sweep line; higher values make a longer green glow. Your aircraft, airports and location will not change.</p>
+<div class="label">QUICK PRESETS</div>
+<div class="two" id="sweepPresets" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+<button class="pick" type="button" data-trail="0" data-seconds="11" data-brightness="100">Crisp</button>
+<button class="pick" type="button" data-trail="50" data-seconds="11" data-brightness="100">Classic</button>
+<button class="pick" type="button" data-trail="100" data-seconds="11" data-brightness="100">Glow</button>
+</div>
+<label for="sweepTrail">TRAIL / GHOSTING <span id="sweepTrailValue" class="tag">50%</span></label>
+<input id="sweepTrail" type="range" min="0" max="100" step="5" value="50" style="width:100%;min-height:34px"/>
+<div class="flex hint" style="justify-content:space-between"><span>No trail</span><span>Long trail</span></div>
+<label for="sweepSeconds">ROTATION SPEED <span id="sweepSecondsValue" class="tag">11 sec / turn</span></label>
+<input id="sweepSeconds" type="range" min="5" max="20" step="1" value="11" style="width:100%;min-height:34px"/>
+<div class="flex hint" style="justify-content:space-between"><span>Fast</span><span>Slow</span></div>
+<label for="sweepBrightness">SWEEP BRIGHTNESS <span id="sweepBrightnessValue" class="tag">100%</span></label>
+<input id="sweepBrightness" type="range" min="20" max="100" step="5" value="100" style="width:100%;min-height:34px"/>
+<button id="sweepApply" class="action" type="button">Apply radar sweep</button>
+<div id="sweepStatus" class="info">Adjust your sweep and press Apply. Changes appear on the physical radar without rebooting.</div>
+<p class="note">The display's own refresh can cause artifacts that a software trail setting cannot eliminate completely. This changes the intentional glow, not the hardware refresh rate.</p>
+</section>
 <footer class="note">SkyOrb community replacement • Flight data: <a href="https://adsb.lol/">ADSB.lol</a> and <a href="https://adsb.fi/">ADSB.fi</a> • Airport/address data: © OpenStreetMap contributors • For hobby use only, not navigation.</footer>
 </main><script>
 const $=id=>document.getElementById(id),C=$('scope'),g=C.getContext('2d');
 let flights=[],airports=[],rad=20,lat=0,lon=0,locSet=false,connected=false,palette='#ff9200';
 let last=0,lastStatus='';
+let sweepPrefs={trail:50,seconds:11,brightness:100};
+function updateSweepControls(trail,seconds,brightness){
+  trail=Number(trail);seconds=Number(seconds);brightness=Number(brightness);
+  if(!Number.isFinite(trail))trail=50;if(!Number.isFinite(seconds))seconds=11;
+  if(!Number.isFinite(brightness))brightness=100;
+  trail=Math.max(0,Math.min(100,trail));seconds=Math.max(5,Math.min(20,seconds));
+  brightness=Math.max(20,Math.min(100,brightness));
+  sweepPrefs={trail,seconds,brightness};
+  $('sweepTrail').value=trail;$('sweepSeconds').value=seconds;$('sweepBrightness').value=brightness;
+  $('sweepTrailValue').textContent=trail===0?'Off':trail+'%';
+  $('sweepSecondsValue').textContent=seconds+' sec / turn';
+  $('sweepBrightnessValue').textContent=brightness+'%';
+  for(const b of $('sweepPresets').querySelectorAll('button')){
+    b.classList.toggle('active',Number(b.dataset.trail)===trail && Number(b.dataset.seconds)===seconds && Number(b.dataset.brightness)===brightness);
+  }
+}
+for(const id of ['sweepTrail','sweepSeconds','sweepBrightness']){
+  $(id).addEventListener('input',()=>updateSweepControls($('sweepTrail').value,$('sweepSeconds').value,$('sweepBrightness').value));
+}
+for(const b of $('sweepPresets').querySelectorAll('button')){
+  b.addEventListener('click',()=>updateSweepControls(b.dataset.trail,b.dataset.seconds,b.dataset.brightness));
+}
+$('sweepApply').onclick=async()=>{
+  const button=$('sweepApply');button.disabled=true;msg('sweepStatus','Saving radar sweep...');
+  try{
+    let res=await api('/radar/sweep',{method:'POST',body:new URLSearchParams({trail:sweepPrefs.trail,seconds:sweepPrefs.seconds,brightness:sweepPrefs.brightness})});
+    msg('sweepStatus',res.message||'Sweep updated.');
+  }catch(e){msg('sweepStatus','Could not save sweep: '+e.message,true)}
+  finally{button.disabled=false;}
+};
+
 const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function msg(id,s,err=false){let e=$(id);e.textContent=s;e.classList.toggle('error',!!err);e.classList.toggle('ok',!err);}
 async function api(url,options){let r=await fetch(url,options),txt=await r.text();let x;try{x=JSON.parse(txt)}catch(e){throw Error('Unexpected reply (HTTP '+r.status+')')}if(!r.ok||x.error)throw Error(x.error||('HTTP '+r.status));return x;}
@@ -84,7 +135,7 @@ function setPalette(v){if(!/^#[a-f\d]{6}$/i.test(v||''))return;palette=v;documen
 for(let b of $('colors').querySelectorAll('button'))b.classList.toggle('on',b.dataset.c.toLowerCase()===v.toLowerCase());}
 async function config(){try{let d=await api('/api/config');$('lat').value=d.locationSet?d.lat:'';$('lon').value=d.locationSet?d.lon:'';
 locSet=!!d.locationSet;lat=d.lat;lon=d.lon;setRange(d.radius||20);setClock(!!d.clock24);$('swapper').checked=!!d.swap;
-$('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');airports=d.airports||[];drawAirports();
+$('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');updateSweepControls(d.sweepTrail??50,d.sweepSeconds??11,d.sweepBrightness??100);airports=d.airports||[];drawAirports();
 msg('saveStatus',locSet?'Location saved: '+lat.toFixed(4)+', '+lon.toFixed(4):'No location saved yet. Search an address or enter coordinates, then Apply.');
 }catch(e){msg('saveStatus','Could not load settings: '+e.message,true)}}
 function drawAirports(){let e=$('airports');e.replaceChildren();if(!airports.length){e.textContent='No airports saved.';return;}for(let i=0;i<airports.length;i++){
@@ -136,13 +187,19 @@ let deg=document.createElement('span');deg.textContent=Math.round(a.heading||0)+
 }catch(e){msg('feedStatus','Cannot reach SkyOrb: '+e.message,true)}}
 function pos(a){let scale=Math.max(1,rad)*.868976,dx=(a.lon-lon)*60*Math.cos(lat*Math.PI/180),dy=(a.lat-lat)*60;
 return [320+dx/scale*281,320-dy/scale*281];}
-function sweep(ts){const S=640,R=282,theta=(ts/11000*2*Math.PI)%(Math.PI*2);g.fillStyle='#031006';g.fillRect(0,0,S,S);
+function sweep(ts){const S=640,R=282,theta=(ts/(sweepPrefs.seconds*1000)*2*Math.PI)%(Math.PI*2);g.fillStyle='#031006';g.fillRect(0,0,S,S);
 g.strokeStyle='#14401e';g.lineWidth=2;for(let r of [R/4,R/2,3*R/4,R]){g.beginPath();g.arc(320,320,r,0,2*Math.PI);g.stroke();}
 g.lineWidth=1;g.beginPath();g.moveTo(320,38);g.lineTo(320,602);g.moveTo(38,320);g.lineTo(602,320);g.stroke();
 for(let j=0;j<12;j++){let angle=j*Math.PI/6;g.beginPath();g.moveTo(320+R*Math.sin(angle),320-R*Math.cos(angle));g.lineTo(320+(R-10)*Math.sin(angle),320-(R-10)*Math.cos(angle));g.stroke();}
 g.fillStyle='#24e353';g.font='bold 17px monospace';g.textAlign='center';g.fillText('N',320,49);g.fillText('20 mi'.replace('20',String(rad)),320,609);
-for(let k=22;k>=0;k--){let a=theta-k*.010,alpha=(1-k/23)*.75;g.strokeStyle='rgba(28,255,63,'+alpha.toFixed(3)+')';g.lineWidth=3;
-g.beginPath();g.moveTo(320,320);g.lineTo(320+R*Math.sin(a),320-R*Math.cos(a));g.stroke();}
+let sweepRays=sweepPrefs.trail===0?1:1+Math.round(sweepPrefs.trail*.48);
+ let sweepWidth=sweepPrefs.trail*.009;
+ for(let k=sweepRays-1;k>=0;k--){
+ let progress=sweepRays===1?1:(sweepRays-1-k)/(sweepRays-1);
+ let a=theta-(sweepRays===1?0:sweepWidth*k/(sweepRays-1));
+ let alpha=(sweepRays===1?1:.10+.90*progress)*(sweepPrefs.brightness/100);
+ g.strokeStyle='rgba(28,255,63,'+alpha.toFixed(3)+')';g.lineWidth=3;
+ g.beginPath();g.moveTo(320,320);g.lineTo(320+R*Math.sin(a),320-R*Math.cos(a));g.stroke();}
 for(let a of airports){let [x,y]=pos(a);if(Math.hypot(x-320,y-320)>R)continue;g.lineWidth=2;g.strokeStyle='#62c8ff';g.beginPath();g.arc(x,y,5,0,2*Math.PI);g.stroke();g.fillStyle='#e2e2e2';g.textAlign='left';g.font='15px monospace';g.fillText(a.name,x+8,y+13);}
 for(let a of flights){let [x,y]=pos(a);if(Math.hypot(x-320,y-320)>R)continue;let heading=(a.heading||0)*Math.PI/180;
 let ang=Math.atan2(x-320,320-y),diff=Math.abs(Math.atan2(Math.sin(ang-theta),Math.cos(ang-theta)));let col=diff<.25?'#c1ffeb':'#56b7ff';
