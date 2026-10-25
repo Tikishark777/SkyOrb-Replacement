@@ -72,6 +72,8 @@ struct Config {
   String ssid, password, tzName="UTC", tzAbbr="UTC", accent="#ff9200", otaPassword="";
   float lat=0, lon=0;
   int radius=20;
+  // Radar animation preferences; changes never reset location or flight data.
+  int sweepTrail=50, sweepSeconds=11, sweepBrightness=100;
   bool locationSet=false, clock24=false, swapScreens=false;
   float fallback=0;                 // UTC offset hours (only if lookup fails)
   int utcOffset=0;                 // derived offset, refreshed for DST
@@ -100,7 +102,9 @@ void savePrefs(){
   Config c=copyCfg();
   prefs.putString("ssid",c.ssid);prefs.putString("pass",c.password);
   prefs.putBool("hasLoc",c.locationSet);prefs.putFloat("lat",c.lat);prefs.putFloat("lon",c.lon);
-  prefs.putInt("rad",c.radius);prefs.putBool("24h",c.clock24);prefs.putBool("swap",c.swapScreens);
+  prefs.putInt("rad",c.radius);
+  prefs.putInt("swTrail",c.sweepTrail);prefs.putInt("swSecs",c.sweepSeconds);prefs.putInt("swBright",c.sweepBrightness);
+  prefs.putBool("24h",c.clock24);prefs.putBool("swap",c.swapScreens);
   prefs.putFloat("fallback",c.fallback);prefs.putString("accent",c.accent);
   prefs.putString("tz",c.tzName);prefs.putString("abbr",c.tzAbbr);prefs.putInt("offset",c.utcOffset);
   prefs.putString("otaPass",c.otaPassword);
@@ -114,6 +118,9 @@ void loadPrefs(){
   cfg.ssid=prefs.getString("ssid","");cfg.password=prefs.getString("pass","");
   cfg.locationSet=prefs.getBool("hasLoc",false);cfg.lat=prefs.getFloat("lat",0);cfg.lon=prefs.getFloat("lon",0);
   cfg.radius=clampI(prefs.getInt("rad",20),5,30);
+  cfg.sweepTrail=clampI(prefs.getInt("swTrail",50),0,100);
+  cfg.sweepSeconds=clampI(prefs.getInt("swSecs",11),5,20);
+  cfg.sweepBrightness=clampI(prefs.getInt("swBright",100),20,100);
   cfg.clock24=prefs.getBool("24h",false);cfg.swapScreens=prefs.getBool("swap",false);
   cfg.fallback=prefs.getFloat("fallback",0);cfg.accent=prefs.getString("accent","#ff9200");
   cfg.tzName=prefs.getString("tz","UTC");cfg.tzAbbr=prefs.getString("abbr","UTC");cfg.utcOffset=prefs.getInt("offset",0);
@@ -317,6 +324,7 @@ void publishConfig(){
   Config c=copyCfg();JsonDocument d;
   d["ssid"]=c.ssid;d["lat"]=c.lat;d["lon"]=c.lon;d["radius"]=c.radius;
   d["locationSet"]=c.locationSet;d["clock24"]=c.clock24;d["swap"]=c.swapScreens;
+  d["sweepTrail"]=c.sweepTrail;d["sweepSeconds"]=c.sweepSeconds;d["sweepBrightness"]=c.sweepBrightness;
   d["accent"]=c.accent;d["timezone"]=c.tzName;d["timezoneAbbr"]=c.tzAbbr;d["fallback"]=c.fallback;d["otaEnabled"]=c.otaPassword.length()>=8;
   JsonArray a=d["airports"].to<JsonArray>();
   for(int i=0;i<c.airportCount;i++){
@@ -583,6 +591,21 @@ void initWeb(){
     xSemaphoreTake(guard,portMAX_DELAY);cfg.airportCount=0;xSemaphoreGive(guard);
     savePrefs();radarSceneDirty=true;JsonDocument d;d["ok"]=true;replyJson(d);
   });
+  // Dedicated endpoint. Does not modify center, radius, airports, or Wi-Fi.
+  server.on("/radar/sweep",HTTP_POST,[](){
+    if(!server.hasArg("trail")||!server.hasArg("seconds")||!server.hasArg("brightness")){
+      errorJson("Missing sweep preference");return;
+    }
+    int trail=clampI(server.arg("trail").toInt(),0,100);
+    int seconds=clampI(server.arg("seconds").toInt(),5,20);
+    int brightness=clampI(server.arg("brightness").toInt(),20,100);
+    xSemaphoreTake(guard,portMAX_DELAY);
+    cfg.sweepTrail=trail;cfg.sweepSeconds=seconds;cfg.sweepBrightness=brightness;
+    xSemaphoreGive(guard);
+    savePrefs();
+    JsonDocument d;d["ok"]=true;d["trail"]=trail;d["seconds"]=seconds;d["brightness"]=brightness;
+    d["message"]="Radar sweep updated. No restart needed.";replyJson(d);
+  });
   server.on("/theme",HTTP_POST,[](){
     String a=server.arg("accent");
     if(a.length()!=7||a[0]!='#'){errorJson("Invalid color");return;}
@@ -763,15 +786,19 @@ static void displayRadarFrame(Adafruit_GC9A01A &display){
     display.drawRGBBitmap(0,y,radarBlitRows,RADAR_SIZE,rows);
   }
 }
-static void drawBufferedSweep(Adafruit_GFX &t,float sweep){
-  constexpr int SWEEP_RAYS=25, SWEEP_LENGTH=109;
-  for(int k=SWEEP_RAYS-1;k>=0;k--){
-    float angle=sweep-k*0.018f;
-    unsigned brightness=(unsigned)(24+231*(SWEEP_RAYS-1-k)/(SWEEP_RAYS-1));
-    unsigned green6=(brightness*63)/255;
-    uint16_t col=(uint16_t)(green6<<5);
+// Draw complete sweep into RGB332 memory; no direct erase or LCD clearing.
+// Trail 0 is exactly one line. The 50% default visually matches v3.3.
+static void drawBufferedSweep(Adafruit_GFX &t,float sweep,const Config &c){
+  constexpr int SWEEP_LENGTH=109;
+  const int rays=c.sweepTrail==0?1:(1+(c.sweepTrail*48+50)/100);
+  const float widthRadians=(c.sweepTrail*0.90f)/100.0f;
+  for(int k=rays-1;k>=0;k--){
+    const float progress=rays==1?1.0f:(float)(rays-1-k)/(float)(rays-1);
+    const float fade=rays==1?1.0f:(0.10f+0.90f*progress);
+    const float angle=sweep-(rays==1?0.0f:widthRadians*((float)k/(rays-1)));
+    const int green6=clampI((int)lroundf(63.0f*(c.sweepBrightness/100.0f)*fade),1,63);
     t.drawLine(120,120,lroundf(120+SWEEP_LENGTH*sinf(angle)),
-                  lroundf(120-SWEEP_LENGTH*cosf(angle)),col);
+                  lroundf(120-SWEEP_LENGTH*cosf(angle)),(uint16_t)(green6<<5));
   }
 }
 void renderRadar(const Config &c){
@@ -787,8 +814,9 @@ void renderRadar(const Config &c){
   }
   uint32_t now=millis();
   drawRadarBackground(c,*radarCanvas,true);
-  float sweep=(now%11000UL)*(2.0f*PI/11000.0f);
-  drawBufferedSweep(*radarCanvas,sweep);
+  const uint32_t cycleMs=(uint32_t)c.sweepSeconds*1000UL;
+  float sweep=(now%cycleMs)*(2.0f*PI/(float)cycleMs);
+  drawBufferedSweep(*radarCanvas,sweep,c);
   displayRadarFrame(display);
   radarSceneDirty=false;
 }
