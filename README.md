@@ -127,19 +127,10 @@ The repository contains the firmware, local dashboard UI, and browser installer.
 | [`web-installer/index.html`](web-installer/index.html) | Public browser installer and illustrated build guide |
 | [`web-installer/manifest.json`](web-installer/manifest.json) | ESP Web Tools binary locations |
 
-**Editing guidance:** To change the public installation page, edit `web-installer/index.html`. To change this GitHub project overview, edit `README.md`. Documentation-only changes may trigger the normal build/deployment workflow but do not alter the firmware source. **Do not replace `src/main.cpp` or change GPIO wiring merely to update website content.**
 
 ## Issues, contributions, and maintenance
 
 For firmware problems, [open a GitHub issue](https://github.com/Tikishark777/SkyOrb-Replacement/issues) and include the ESP32 model, display type, browser, relevant Actions run, and any serial-console logs. **Remove private details** before posting logs.
-
-For project maintainers:
-
-- Keep GitHub Actions deployment enabled and check that the workflow succeeds after changes. Commit history and build logs are public, including historical failed builds.
-- Never commit Wi-Fi passwords, private locations, API keys, or tokens. The documented setup-hotspot password is a firmware default, not a personal credential. If a real secret is exposed, **rotate it**; removing it from the current file does not erase Git history.
-- Use GitHub Releases (for example, `v3.5.0`) to mark tested firmware versions and retain a local copy of the last working installer artifacts.
-- Update the README, the Pages installer, and version metadata when firmware features change. Documentation edits alone do not require reflashing a working device.
-- In the repository **About** sidebar, add the installation-site URL and useful topics, such as `esp32`, `gc9a01`, `flight-radar`, `ads-b`, `arduino`, `clock`, and `github-pages`.
 
 ## Origins and acknowledgements
 
