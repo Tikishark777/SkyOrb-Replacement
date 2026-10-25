@@ -72,6 +72,11 @@ struct Config {
   String ssid, password, tzName="UTC", tzAbbr="UTC", accent="#ff9200", otaPassword="";
   float lat=0, lon=0;
   int radius=20;
+  // Optional international clock presentation. Defaults preserve date visibility
+  // and avoid redrawing the entire clock once per second.
+  bool clockSeconds=false, clockLeadingZero=false;
+  int clockDateStyle=0; // 0=long date, 1=US, 2=day-first, 3=ISO
+  int clockTzMode=1;    // 0=hidden, 1=regional abbreviation, 2=UTC offset
   // Radar animation preferences; changes never reset location or flight data.
   int sweepTrail=50, sweepSeconds=11, sweepBrightness=100;
   bool locationSet=false, clock24=false, swapScreens=false;
@@ -105,6 +110,8 @@ void savePrefs(){
   prefs.putInt("rad",c.radius);
   prefs.putInt("swTrail",c.sweepTrail);prefs.putInt("swSecs",c.sweepSeconds);prefs.putInt("swBright",c.sweepBrightness);
   prefs.putBool("24h",c.clock24);prefs.putBool("swap",c.swapScreens);
+  prefs.putBool("clSec",c.clockSeconds);prefs.putBool("clZero",c.clockLeadingZero);
+  prefs.putInt("clDate",c.clockDateStyle);prefs.putInt("clZone",c.clockTzMode);
   prefs.putFloat("fallback",c.fallback);prefs.putString("accent",c.accent);
   prefs.putString("tz",c.tzName);prefs.putString("abbr",c.tzAbbr);prefs.putInt("offset",c.utcOffset);
   prefs.putString("otaPass",c.otaPassword);
@@ -122,6 +129,10 @@ void loadPrefs(){
   cfg.sweepSeconds=clampI(prefs.getInt("swSecs",11),5,20);
   cfg.sweepBrightness=clampI(prefs.getInt("swBright",100),20,100);
   cfg.clock24=prefs.getBool("24h",false);cfg.swapScreens=prefs.getBool("swap",false);
+  cfg.clockSeconds=prefs.getBool("clSec",false);
+  cfg.clockLeadingZero=prefs.getBool("clZero",false);
+  cfg.clockDateStyle=clampI(prefs.getInt("clDate",0),0,3);
+  cfg.clockTzMode=clampI(prefs.getInt("clZone",1),0,2);
   cfg.fallback=prefs.getFloat("fallback",0);cfg.accent=prefs.getString("accent","#ff9200");
   cfg.tzName=prefs.getString("tz","UTC");cfg.tzAbbr=prefs.getString("abbr","UTC");cfg.utcOffset=prefs.getInt("offset",0);
   cfg.otaPassword=prefs.getString("otaPass","");
@@ -324,6 +335,8 @@ void publishConfig(){
   Config c=copyCfg();JsonDocument d;
   d["ssid"]=c.ssid;d["lat"]=c.lat;d["lon"]=c.lon;d["radius"]=c.radius;
   d["locationSet"]=c.locationSet;d["clock24"]=c.clock24;d["swap"]=c.swapScreens;
+  d["clockSeconds"]=c.clockSeconds;d["clockLeadingZero"]=c.clockLeadingZero;
+  d["clockDateStyle"]=c.clockDateStyle;d["clockTzMode"]=c.clockTzMode;
   d["sweepTrail"]=c.sweepTrail;d["sweepSeconds"]=c.sweepSeconds;d["sweepBrightness"]=c.sweepBrightness;
   d["accent"]=c.accent;d["timezone"]=c.tzName;d["timezoneAbbr"]=c.tzAbbr;d["fallback"]=c.fallback;d["otaEnabled"]=c.otaPassword.length()>=8;
   JsonArray a=d["airports"].to<JsonArray>();
@@ -377,6 +390,14 @@ void onSave(){
   xSemaphoreTake(guard,portMAX_DELAY);
   cfg.lat=lat;cfg.lon=lon;cfg.radius=clampI(server.arg("radius").toInt(),5,30);
   cfg.clock24=server.arg("clock24")=="1";cfg.swapScreens=server.hasArg("swap");
+  // This form also includes the clock controls. Do not touch these when
+  // older dashboard clients post only their historic location fields.
+  if(server.hasArg("clockDateStyle"))cfg.clockDateStyle=clampI(server.arg("clockDateStyle").toInt(),0,3);
+  if(server.hasArg("clockTzMode"))cfg.clockTzMode=clampI(server.arg("clockTzMode").toInt(),0,2);
+  if(server.hasArg("clockOptionsPresent")){
+    cfg.clockSeconds=server.arg("clockSeconds")=="1";
+    cfg.clockLeadingZero=server.arg("clockLeadingZero")=="1";
+  }
   cfg.accent=accent;cfg.fallback=clampF(server.arg("fallback").toFloat(),-12,14);
   cfg.locationSet=true;
   if(moved){cfg.tzName="UTC fallback";cfg.tzAbbr="UTC";cfg.utcOffset=roundf(cfg.fallback*3600);cfg.airportCount=0;}
@@ -606,6 +627,26 @@ void initWeb(){
     JsonDocument d;d["ok"]=true;d["trail"]=trail;d["seconds"]=seconds;d["brightness"]=brightness;
     d["message"]="Radar sweep updated. No restart needed.";replyJson(d);
   });
+  // Clock-only updates must never reset a location or clear saved airports.
+  server.on("/clock/options",HTTP_POST,[](){
+    if(!server.hasArg("clock24")||!server.hasArg("clockDateStyle")||!server.hasArg("clockTzMode")){
+      errorJson("Clock options are incomplete.");return;
+    }
+    int style=server.arg("clockDateStyle").toInt();
+    int zone=server.arg("clockTzMode").toInt();
+    if(style<0||style>3||zone<0||zone>2){errorJson("Invalid clock option.");return;}
+    xSemaphoreTake(guard,portMAX_DELAY);
+    cfg.clock24=server.arg("clock24")=="1";
+    cfg.clockSeconds=server.arg("clockSeconds")=="1";
+    cfg.clockLeadingZero=server.arg("clockLeadingZero")=="1";
+    cfg.clockDateStyle=style;
+    cfg.clockTzMode=zone;
+    xSemaphoreGive(guard);
+    savePrefs();
+    JsonDocument d;d["ok"]=true;
+    d["message"]="Clock options saved. Clock display updates automatically.";
+    replyJson(d);
+  });
   server.on("/theme",HTTP_POST,[](){
     String a=server.arg("accent");
     if(a.length()!=7||a[0]!='#'){errorJson("Invalid color");return;}
@@ -634,41 +675,193 @@ void center(Adafruit_GFX &t,const String &s,int y,uint8_t sz,uint16_t col){
 // The clock is updated only when text actually changes (once per minute,
 // or on date/time-zone/format changes). It NEVER shares the radar background
 // buffer and never repeatedly blanks the physical screen.
+// Most time zone APIs return a numeric UTC offset rather than a regional
+// abbreviation (e.g. "GMT-7"). Use a known IANA-zone + offset combination for
+// familiar labels; otherwise display the exact offset, which is meaningful
+// worldwide, including half-hour and quarter-hour time zones.
+static String utcOffsetLabel(int seconds){
+  int minutes=(int)(abs(seconds)/60);
+  char out[20];
+  snprintf(out,sizeof(out),"UTC%c%02d:%02d",seconds>=0?'+':'-',minutes/60,minutes%60);
+  return String(out);
+}
+struct ZoneAbbreviation {
+  const char *iana;const char *standard;const char *daylight;
+  int standardSeconds;int daylightSeconds;
+};
+static String clockZoneLabel(const Config &c){
+  if(c.clockTzMode==0)return "";
+  if(c.clockTzMode==2)return utcOffsetLabel(c.utcOffset);
+  const String &z=c.tzName;
+  if((z=="UTC"||z=="Etc/UTC"||z=="Etc/GMT"||z=="GMT")&&c.utcOffset==0)return "UTC";
+  // Only use an abbreviation when the zone AND offset agree. Some countries
+  // have altered DST rules; the UTC offset remains the safe fallback.
+  static const ZoneAbbreviation known[]={
+    {"America/Los_Angeles","PST","PDT",-28800,-25200},
+    {"America/Vancouver","PST","PDT",-28800,-25200},
+    {"America/Tijuana","PST","PDT",-28800,-25200},
+    {"America/Denver","MST","MDT",-25200,-21600},
+    {"America/Edmonton","MST","MDT",-25200,-21600},
+    {"America/Boise","MST","MDT",-25200,-21600},
+    {"America/Phoenix","MST","MST",-25200,-25200},
+    {"America/Chicago","CST","CDT",-21600,-18000},
+    {"America/Winnipeg","CST","CDT",-21600,-18000},
+    {"America/Mexico_City","CST","CST",-21600,-21600},
+    {"America/New_York","EST","EDT",-18000,-14400},
+    {"America/Toronto","EST","EDT",-18000,-14400},
+    {"America/Detroit","EST","EDT",-18000,-14400},
+    {"America/Halifax","AST","ADT",-14400,-10800},
+    {"America/St_Johns","NST","NDT",-12600,-9000},
+    {"America/Anchorage","AKST","AKDT",-32400,-28800},
+    {"Pacific/Honolulu","HST","HST",-36000,-36000},
+    {"America/Puerto_Rico","AST","AST",-14400,-14400},
+    {"Europe/London","GMT","BST",0,3600},
+    {"Europe/Dublin","GMT","IST",0,3600},
+    {"Europe/Lisbon","WET","WEST",0,3600},
+    {"Europe/Paris","CET","CEST",3600,7200},
+    {"Europe/Berlin","CET","CEST",3600,7200},
+    {"Europe/Madrid","CET","CEST",3600,7200},
+    {"Europe/Rome","CET","CEST",3600,7200},
+    {"Europe/Amsterdam","CET","CEST",3600,7200},
+    {"Europe/Brussels","CET","CEST",3600,7200},
+    {"Europe/Zurich","CET","CEST",3600,7200},
+    {"Europe/Stockholm","CET","CEST",3600,7200},
+    {"Europe/Oslo","CET","CEST",3600,7200},
+    {"Europe/Copenhagen","CET","CEST",3600,7200},
+    {"Europe/Vienna","CET","CEST",3600,7200},
+    {"Europe/Warsaw","CET","CEST",3600,7200},
+    {"Europe/Prague","CET","CEST",3600,7200},
+    {"Europe/Budapest","CET","CEST",3600,7200},
+    {"Europe/Helsinki","EET","EEST",7200,10800},
+    {"Europe/Athens","EET","EEST",7200,10800},
+    {"Europe/Bucharest","EET","EEST",7200,10800},
+    {"Europe/Kyiv","EET","EEST",7200,10800},
+    {"Europe/Riga","EET","EEST",7200,10800},
+    {"Europe/Tallinn","EET","EEST",7200,10800},
+    {"Europe/Vilnius","EET","EEST",7200,10800},
+    {"Africa/Cairo","EET","EEST",7200,10800},
+    {"Africa/Johannesburg","SAST","SAST",7200,7200},
+    {"Africa/Nairobi","EAT","EAT",10800,10800},
+    {"Asia/Kolkata","IST","IST",19800,19800},
+    {"Asia/Calcutta","IST","IST",19800,19800},
+    {"Asia/Kathmandu","NPT","NPT",20700,20700},
+    {"Asia/Katmandu","NPT","NPT",20700,20700},
+    {"Asia/Tokyo","JST","JST",32400,32400},
+    {"Asia/Seoul","KST","KST",32400,32400},
+    {"Asia/Shanghai","CST","CST",28800,28800},
+    {"Asia/Hong_Kong","HKT","HKT",28800,28800},
+    {"Asia/Taipei","CST","CST",28800,28800},
+    {"Asia/Singapore","SGT","SGT",28800,28800},
+    {"Asia/Manila","PHT","PHT",28800,28800},
+    {"Asia/Dubai","GST","GST",14400,14400},
+    {"Asia/Karachi","PKT","PKT",18000,18000},
+    {"Asia/Dhaka","BST","BST",21600,21600},
+    {"Asia/Colombo","SLST","SLST",19800,19800},
+    {"Asia/Bangkok","ICT","ICT",25200,25200},
+    {"Asia/Jakarta","WIB","WIB",25200,25200},
+    {"Asia/Kabul","AFT","AFT",16200,16200},
+    {"Australia/Sydney","AEST","AEDT",36000,39600},
+    {"Australia/Melbourne","AEST","AEDT",36000,39600},
+    {"Australia/Hobart","AEST","AEDT",36000,39600},
+    {"Australia/Canberra","AEST","AEDT",36000,39600},
+    {"Australia/Brisbane","AEST","AEST",36000,36000},
+    {"Australia/Adelaide","ACST","ACDT",34200,37800},
+    {"Australia/Darwin","ACST","ACST",34200,34200},
+    {"Australia/Perth","AWST","AWST",28800,28800},
+    {"Australia/Eucla","ACWST","ACWST",31500,31500},
+    {"Pacific/Auckland","NZST","NZDT",43200,46800},
+    {"Pacific/Chatham","CHAST","CHADT",45900,49500},
+    {"America/Sao_Paulo","BRT","BRT",-10800,-10800},
+    {"America/Argentina/Buenos_Aires","ART","ART",-10800,-10800},
+    {"America/Bogota","COT","COT",-18000,-18000},
+    {"America/Lima","PET","PET",-18000,-18000},
+    {"America/Santiago","CLT","CLST",-14400,-10800}
+  };
+  for(const auto &item:known){
+    if(z==item.iana){
+      if(c.utcOffset==item.standardSeconds)return String(item.standard);
+      if(c.utcOffset==item.daylightSeconds)return String(item.daylight);
+      break;
+    }
+  }
+  // No abbreviation can be assumed for unknown IANA locations. This label is
+  // universally valid and correctly handles :30 and :45 minute offsets.
+  return utcOffsetLabel(c.utcOffset);
+}
 void renderClock(const Config &c){
   Adafruit_GC9A01A &t=clockScreen(c);
   static Adafruit_GC9A01A *lastDisplay=nullptr;
-  static String lastTime="",lastDate="";
-  bool first=lastDisplay!=&t;
-  if(first){t.fillScreen(0x0000);lastDisplay=&t;lastTime="";lastDate="";}
+  static String lastMain="",lastSeconds="",lastSubtitle="",lastDate="";
+  static int lastLayout=-1;
+  const int layout=(c.clockSeconds?1:0)|(c.clockLeadingZero?2:0)|
+      ((c.clockDateStyle&3)<<2)|((c.clockTzMode&3)<<4)|(c.clock24?64:0);
+  const bool first=(lastDisplay!=&t);
+  if(first){t.fillScreen(0x0000);lastDisplay=&t;}
+  if(first||layout!=lastLayout){
+    t.fillRect(6,71,228,143,0x0000);
+    lastMain="";lastSeconds="";lastSubtitle="";lastDate="";
+    lastLayout=layout;
+  }
   time_t utc=time(nullptr);
   if(utc<1700000000){
-    if(first){center(t,"SYNCING TIME",105,2,0xFFFF);}
+    if(first)center(t,"SYNCING TIME",105,2,0xFFFF);
     return;
   }
-  time_t localEpoch=utc+c.utcOffset;struct tm tmTime;gmtime_r(&localEpoch,&tmTime);
-  int hour=tmTime.tm_hour;bool pm=hour>=12;
+  const time_t localEpoch=utc+c.utcOffset;
+  struct tm dateTime;gmtime_r(&localEpoch,&dateTime);
+  int hour=dateTime.tm_hour;
+  const bool pm=hour>=12;
   if(!c.clock24){hour%=12;if(hour==0)hour=12;}
-  char buf[64];snprintf(buf,sizeof(buf),"%02d:%02d",hour,tmTime.tm_min);
-  String top=String(buf)+" "+c.tzAbbr;
-  if(top.length()>14)top=top.substring(0,14);
-  String stamp=top+(c.clock24?"":pm?" PM":" AM");
-  if(stamp!=lastTime){
-    t.fillRect(8,77,224,63,0x0000);
-    center(t,top,89,top.length()>11?2:3,0xFFFF);
-    if(!c.clock24)center(t,pm?"PM":"AM",122,2,0xFFFF);
-    lastTime=stamp;
+  char buf[64];
+  if(!c.clock24&&!c.clockLeadingZero)snprintf(buf,sizeof(buf),"%d:%02d",hour,dateTime.tm_min);
+  else snprintf(buf,sizeof(buf),"%02d:%02d",hour,dateTime.tm_min);
+  const String mainTime(buf);
+  const int mainWidth=(int)mainTime.length()*24; // 6 px per glyph, text size 4
+  const int smallWidth=c.clockSeconds?36:0; // ":SS" in text size 2
+  const int x=max(10,(240-mainWidth-smallWidth-(c.clockSeconds?5:0))/2);
+  if(lastMain!=mainTime){
+    t.fillRect(15,79,210,44,0x0000);
+    t.setTextColor(0xFFFF);t.setTextSize(4);t.setCursor(x,85);t.print(mainTime);
+    lastMain=mainTime;
+    lastSeconds=""; // Main clear also erases the seconds area.
+  }
+  if(c.clockSeconds){
+    snprintf(buf,sizeof(buf),":%02d",dateTime.tm_sec);
+    const String sec(buf);
+    if(sec!=lastSeconds){
+      const int sx=x+mainWidth+5;
+      t.fillRect(sx,102,38,18,0x0000);
+      t.setTextColor(0xFFFF);t.setTextSize(2);t.setCursor(sx,102);t.print(sec);
+      lastSeconds=sec;
+    }
+  }
+  const String zone=clockZoneLabel(c);
+  String subtitle="";
+  if(!c.clock24)subtitle=pm?"PM":"AM";
+  if(zone.length()){if(subtitle.length())subtitle+="  ";subtitle+=zone;}
+  if(subtitle!=lastSubtitle){
+    t.fillRect(13,123,214,20,0x0000);
+    if(subtitle.length())center(t,subtitle,124,subtitle.length()>17?1:2,0xFFFF);
+    lastSubtitle=subtitle;
   }
   static const char* weekdays[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
   static const char* months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
-  snprintf(buf,sizeof(buf),"%s %02d, %04d",months[tmTime.tm_mon],tmTime.tm_mday,tmTime.tm_year+1900);
-  String date=String(weekdays[tmTime.tm_wday])+"/"+buf;
+  switch(c.clockDateStyle){
+    case 1:snprintf(buf,sizeof(buf),"%02d/%02d/%04d",dateTime.tm_mon+1,dateTime.tm_mday,dateTime.tm_year+1900);break;
+    case 2:snprintf(buf,sizeof(buf),"%02d/%02d/%04d",dateTime.tm_mday,dateTime.tm_mon+1,dateTime.tm_year+1900);break;
+    case 3:snprintf(buf,sizeof(buf),"%04d-%02d-%02d",dateTime.tm_year+1900,dateTime.tm_mon+1,dateTime.tm_mday);break;
+    default:snprintf(buf,sizeof(buf),"%s %d, %04d",months[dateTime.tm_mon],dateTime.tm_mday,dateTime.tm_year+1900);break;
+  }
+  String date=String(weekdays[dateTime.tm_wday])+"/"+String(buf);
   if(date!=lastDate){
-    t.fillRect(8,139,224,66,0x0000);
-    center(t,weekdays[tmTime.tm_wday],142,2,0xFDC7);
-    center(t,buf,168,2,0xFDC7);
+    t.fillRect(10,146,220,57,0x0000);
+    center(t,weekdays[dateTime.tm_wday],148,2,0xFDC7);
+    const uint8_t fontSize=strlen(buf)>16?1:2;
+    center(t,buf,174,fontSize,0xFDC7);
     lastDate=date;
   }
 }
+
 struct XY {int x=120,y=120;float d=0;};
 XY project(float latitude,float longitude,const Config &c){
   const float xnm=(longitude-c.lon)*60.0f*cosf(c.lat*DEG2RAD);
