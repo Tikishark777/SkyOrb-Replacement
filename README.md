@@ -1,151 +1,94 @@
-# SkyOrb Replacement — two-screen ESP32 flight radar + clock
+# SkyOrb Community Edition — ESP32 Flight Radar + Clock
 
-**Preview source project (not yet compiled or hardware-tested).** This is a new,
-independent implementation inspired by the SkyOrb enclosure / original wiring.
-It uses the *same physical GPIO wiring*, so no rewiring should be needed on an
-otherwise working SkyOrb unit. Original project: <https://github.com/GulfCoastMaker/SkyOrb>.
+**Community remake by John Christensen ([@Tikishark777](https://github.com/Tikishark777)).** Based on the original [SkyOrb by GulfCoastMaker](https://gulfcoastmaker.github.io/SkyOrb/). This version preserves the original dual-screen wiring, restores aircraft tracking using alternative ADS-B data feeds, and adds a browser-based installer plus a phone configuration dashboard.
 
-The original binary cannot simply be patched with a new API URL. This project
-reimplements the application and **does not use Airplanes.live**.
+### [Install SkyOrb Community Edition and read the illustrated build guide](https://tikishark777.github.io/SkyOrb-Replacement/)
 
-## What is included
+> **Project status:** The firmware has compiled and been installed and tested on an actual dual-display SkyOrb, with working Wi-Fi setup, address search, radius controls, live aircraft, airport discovery, selectable colors, Wi-Fi reset, and 12/24-hour clock options. The radar sweep works but may exhibit a faint trail/ghosting; this remake does not yet exactly reproduce the original animation. It is hobby firmware, not aviation safety equipment.
 
-| Original MakerWorld function | Implementation in this source project |
-|---|---|
-| Left clock, right radar | Two GC9A01 240×240 screens, software-swappable roles |
-| Live, nearby aircraft without an API key | ADSB.lol; on failed request, fallback to ADSB.fi open data |
-| Moving radar sweep and aircraft glow | 11-second animated sweep, aircraft arrow shows course and proximity glow |
-| Aircraft callsigns and altitudes | Up to 70 recent aircraft on radar; full list in phone portal |
-| Airport markers | OSM Overpass auto-find for coded aerodromes; manual add and delete |
-| Day, date, and time | Internet NTP time; Open-Meteo coordinate-based time-zone detection |
-| Automatic daylight saving | Refreshes regional UTC offset every 6 hours (worst-case DST delay ~6h) |
-| 12 / 24-hour option | Yes; saved in device |
-| Setup from phone | Wi-Fi setup hotspot, phone web portal for location and preferences |
-| Location by address | One-off OpenStreetMap Nominatim lookup, or manual latitude/longitude |
-| 5–30 mile radius | Yes, in user settings |
-| Accent color | Portal color selector; physical screens also use it |
-| Tap flights for Flightradar24 | Aircraft on phone radar/list link to Flightradar24 flight/aircraft pages |
-| Browser flashing | Included ESP Web Tools site + binary packaging script; **binary must be built first** |
+## What it does
 
-**Important:** the FlightRadar24 links are *search/flight history pages*, not
-guaranteed deep links to the exact live aircraft track; their site controls
-whether a given flight can be identified. Free provider API access and
-coverage are subject to change. No flight-tracking data should be used for
-navigation or safety decisions.
+- **Live nearby aircraft** using ADSB.lol with ADSB.fi as a fallback (availability subject to providers).
+- **Dual round displays:** green radar on the right and a white/amber time-and-date clock on the left.
+- **Radar range:** choose 5, 10, 20, or 30 miles.
+- **Nearby airports:** build-generated, offline airport catalogue from [OurAirports](https://ourairports.com/data/) plus manual markers.
+- **Location search:** enter an address or use precise latitude/longitude.
+- **Automatic time zone**, 12/24-hour clock, dashboard colors, network reset and local settings page.
+- **No-code browser installation:** prebuilt firmware flashed from desktop Chrome or Edge using [ESP Web Tools](https://esphome.github.io/esp-web-tools/).
 
-## Original pinout (unchanged)
+## Parts list
 
-| GC9A01 connector | Radar/right (original radar circuit) | Clock/left (original clock circuit) |
-|---|---|---|
-| VCC / GND | 3.3 V / GND | 3.3 V / GND |
+| Part | Quantity | Notes |
+| --- | :---: | --- |
+| ESP-WROOM-32 dev board | 1 | Original 30-pin ESP32 board |
+| GC9A01 TFT display, 1.28 in, 240×240 SPI, 7 pin | 2 | One radar and one clock |
+| 30-pin ESP32 GPIO screw-terminal breakout | 1 optional | Simplifies wiring without soldering |
+| Hookup wires | As needed | Connect both displays to the ESP32 |
+| USB **data** cable | 1 | Needed for browser flashing; USB power for normal use |
+| Printed enclosure | optional | [Original SkyOrb MakerWorld model](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442) |
+
+## Wiring — original SkyOrb pinout (unchanged)
+
+Both displays share **SCL/CLK → GPIO18** and **SDA/MOSI → GPIO23**. The other control pins are independent.
+
+| GC9A01 display pin | Radar screen, **right** | Clock screen, **left** |
+| --- | --- | --- |
+| GND | GND | GND |
+| VCC | **3.3V** | **3.3V** |
 | SCL / CLK | GPIO 18 | GPIO 18 |
 | SDA / MOSI | GPIO 23 | GPIO 23 |
-| RES / RESET | GPIO 4 | GPIO 21 |
-| DC | GPIO 2 | GPIO 17 |
-| CS | GPIO 5 | GPIO 16 |
+| RES / RST | GPIO 4 | GPIO 21 |
+| DC | GPIO 2 | GPIO 17 (TX2) |
+| CS | GPIO 5 | GPIO 16 (RX2) |
 
-If the displays appear reversed in your enclosure, tick **Swap screens** in
-the phone portal. No wiring changes are needed.
+**Important:** Supply 3.3V to these displays, not 5V. Verify the actual pin labels on the modules you purchase. The displays described here are the original SkyOrb-style **7-pin GC9A01** units. The clock/radar roles can be swapped in device settings if necessary, without physically moving the wiring.
 
-## Easiest way to build and flash with USB
+## Install the firmware from your browser
 
-You need a computer with **VS Code** and the **PlatformIO IDE** extension,
-and a USB cable supporting data. The *original* SkyOrb installer is **not**
-updated by downloading this package. The author must publish a compiled
-replacement, or you can build this independent project.
+1. Assemble the hardware using the table above.
+2. Open the [SkyOrb Community Edition installer](https://tikishark777.github.io/SkyOrb-Replacement/) using **Chrome or Edge on a desktop/laptop**.
+3. Connect the ESP32 to the computer using a reliable USB **data** cable (a charging-only cable does not work).
+4. Click **Install SkyOrb Community Edition**, choose the ESP32's COM/serial port and follow the prompts.
+5. Keep it connected until installation is complete. Flashing overwrites existing firmware and may erase Wi-Fi and location settings.
 
-1. Back up or write down the location and Wi-Fi settings from your current unit.
-2. Extract this ZIP. Open the `SkyOrb-Replacement` directory in VS Code with
-   the PlatformIO extension installed.
-3. Connect your 30-pin ESP32 to the computer by a data-capable USB cable.
-4. Click **Build** (PlatformIO checkmark). If it succeeds, click **Upload**
-   (PlatformIO arrow), selecting the appropriate USB port if prompted.
-5. The new firmware uses its own saved-settings namespace and will require
-   setup again. Join `SKYORB-Setup` on your phone; the password is
-   **SKYORB1234**. Open `http://192.168.4.1` and enter home Wi-Fi credentials.
-6. Switch phone back to **home Wi-Fi**; open `http://skyorb.local` or the IP
-   printed over USB Serial Monitor (`115200` baud) to select your location,
-   radius, airport markers, clock format and accent color.
-7. If the IP/hostname is unreachable, verify the ESP32 is on the same network
-   (no client-isolation / guest Wi-Fi).
+**Troubleshooting flashing:** If a USB write fails, retry with a known-good cable and a direct USB port. If the failure repeats at the same point, stop and investigate rather than erasing the device repeatedly. The [original installer](https://gulfcoastmaker.github.io/SkyOrb/) can be retained as a recovery reference.
 
-**If you prefer the exact browser installer workflow:** once the build succeeds,
-run from the project directory:
+## Set up Wi-Fi and the radar from your phone
 
-```bash
-python scripts/prepare_installer.py
-python -m http.server 8000 --directory web-installer
-```
+1. Join the ESP32's network **`SKYORB-Setup`**, password **`SKYORB1234`**.
+2. Open **`http://192.168.4.1/setup`** if the captive portal does not appear automatically. Choose your **2.4 GHz** home Wi-Fi and enter its password.
+3. **Switch your phone back to your normal home Wi-Fi.** This is easy to miss.
+4. Open the **numeric IP address shown on the SkyOrb display** in your phone's browser. `http://skyorb.local/` may also work, but mDNS is unreliable on some networks.
+5. Use the dashboard to search your address, select a radar radius, find nearby airports, choose colors and 12/24-hour time.
 
-Open **http://localhost:8000/** in Chrome or Edge on the *computer with the
-ESP32 USB-connected*. The ESP Web Tools installer in `web-installer/` is now
-usable because the four compiled `.bin` files are present. This does not
-update the original author's Github Pages URL.
+**Connection tip:** Your phone/computer must be able to communicate with the ESP32 on the same LAN.
 
-## Alternative: cloud build + hosted installer through your own GitHub repository
+## Firmware build and source code
 
-If you create your own GitHub repository and upload this project's files
-(including the hidden `.github` directory), a built-in GitHub Actions workflow
-compiles the firmware, packages four `.bin` files, and publishes a hosted
-ESP Web Tools installer using GitHub Pages. Enable **Settings → Pages → Build
-and deployment → Source: GitHub Actions** on *your* repository. On the Actions
-tab, run **Build ESP32 firmware and web installer** if it hasn't run already.
-Once successful, your installer is normally at
-`https://YOUR-ACCOUNT.github.io/YOUR-REPOSITORY/`.
-It can then be used with Chrome or Edge like the original install page.
+This repository contains source for the ESP32 application, setup UI and browser installer. GitHub Actions compiles the firmware, generates an offline airport catalogue from public-domain OurAirports data, packages the boot files, and publishes the installer on GitHub Pages.
 
-A GitHub Actions build or deployment failure means there is not yet a usable
-binary; do **not** try to flash a missing or incomplete image.
+- `src/main.cpp`: firmware, Wi-Fi/networking, aircraft data and rendering.
+- `include/web_ui.h`: local phone/dashboard UI.
+- `scripts/generate_airports.py`: build-time OurAirports airport catalogue generator.
+- `scripts/prepare_installer.py`: copies compiled binaries into `web-installer/`.
+- `.github/workflows/build.yml`: build, package and deploy.
+- `web-installer/index.html`: **public installation/build-guide web page**.
+- `web-installer/manifest.json`: ESP Web Tools binary locations.
 
-## Web portal and diagnostics
+The firmware currently uses the original SkyOrb GPIO assignments; **do not replace `src/main.cpp` or change the wiring just to customize the installation website**. To change website wording or styling, edit `web-installer/index.html` only. To update this GitHub landing page, edit `README.md` only. Changes to those documents trigger a normal GitHub Actions rebuild and redeployment but do not themselves change the firmware source.
 
-- `http://skyorb.local/`: settings, live radar, aircraft list, airports, Wi-Fi.
-- `http://skyorb.local/api/config`: device settings (SSID name only, no password).
-- `http://skyorb.local/api/live`: JSON of feed source, HTTP response code,
-  aircraft count, update age, current aircraft and airport markers.
-- USB serial monitor, **115200 baud**, logs flight-provider errors. `403`
-  denotes denied access; `429` is rate limiting. If ADSB.lol fails, firmware
-  tries the ADSB.fi v3 API.
-- When changing the location, the firmware makes one airport lookup and one
-  timezone lookup. You can request more airports from the portal.
-- Location is mandatory to fetch planes. Plane updates are requested about
-  every 30 seconds while the device has internet access.
+## Credits and acknowledgement
 
-## Usage limits and security considerations
+**Original project concept, dual-display layout, wiring, and enclosure:** **GulfCoastMaker**.
 
-- **Personal/non-commercial use only** unless you've arranged commercial data
-  rights. Flight feed: ADSB.lol (<https://api.adsb.lol/docs>), backup: ADSB.fi
-  (<https://github.com/adsbfi/opendata>). ADSB.lol currently documents free
-  public usage but may require feeder keys later; ADSB.fi public endpoints
-  have request limits, noncommercial terms, and attribution requirements.
-- Airports: OpenStreetMap / ODbL via public Overpass. User-triggered address
-  search: OSM Nominatim, caching duplicate searches for one hour and limiting
-  to at most one request per second per device. Respect provider policies.
-  If Nominatim stops working, enter your latitude/longitude manually.
-- Time-zone data: Open-Meteo, free noncommercial API (CC BY 4.0). Name and
-  effective UTC offset are refreshed at least every six hours. The offset may
-  be temporarily stale during daylight-saving transitions.
-- The ESP32's HTTPS requests use encrypted **but non-certificate-verified**
-  TLS for compatibility with its limited CA storage. This is a prototype,
-  not production-grade network security. Wi-Fi credentials are stored in the
-  ESP32's NVS, and the local portal has **no password protection**. Only use
-  on a home network you trust. The initial setup AP has a *well-known*
-  password and should not be used where strangers can connect.
-- No claims of guaranteed API uptime. If both aircraft providers deny access,
-  the radar shows an error rather than fabricated flights. If all data
-  disappear after operating normally, inspect `/api/live` first.
-- The source has been checked for structural syntax, and the portal JavaScript
-  was checked with Node.js; **it has not yet been compiled, flashed, or tested
-  on a real ESP32 with displays**. Some adjustments may still be required.
+- [Original SkyOrb installation page](https://gulfcoastmaker.github.io/SkyOrb/)
+- [Original SkyOrb GitHub repository](https://github.com/GulfCoastMaker/SkyOrb)
+- [SkyOrb 3D-printable housing on MakerWorld](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442)
 
-## Source layout
+**Community remake, firmware adaptation, integration and testing:** **John Christensen**, [GitHub @Tikishark777](https://github.com/Tikishark777) — [SkyOrb-Replacement repository](https://github.com/Tikishark777/SkyOrb-Replacement).
 
-- `src/main.cpp` — ESP32 firmware, networking, drawing, settings persistence.
-- `include/web_ui.h` — complete embedded phone portal.
-- `platformio.ini` — dependencies and target `esp32dev` board.
-- `scripts/prepare_installer.py` — copies compiled binaries into installer.
-- `.github/workflows/build.yml` — optional cloud build / Pages deployment.
-- `web-installer/` — ESP Web Tools website and manifest; bins appear after build.
+Flight data: [ADSB.lol](https://adsb.lol/) and [ADSB.fi](https://adsb.fi/). Airport coordinates: [OurAirports](https://ourairports.com/data/) (public-domain airport database). Address lookup: [OpenStreetMap contributors](https://www.openstreetmap.org/copyright). Time-zone service: [Open-Meteo](https://open-meteo.com/). Browser installer: [ESP Web Tools](https://esphome.github.io/esp-web-tools/). Radar rendering references: [DeskRadar](https://github.com/arvis91/deskradar) and [ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar). ESP32 and display dependencies retain their own licenses.
 
-MIT License for newly created source. Adafruit and other libraries have their
-own respective open source licenses.
+The original SkyOrb repository uses the **MIT License**. This independent firmware repository has its own [LICENSE](LICENSE); follow all applicable license notices and service-provider terms. The remake is unofficial and is not endorsed by GulfCoastMaker.
+
+**Safety:** This is a hobby display. Aircraft information can be delayed, incomplete or unavailable. Do not use for navigation, flight operations, search-and-rescue or other safety-critical decisions. Use the local configuration dashboard only on a trusted network.
