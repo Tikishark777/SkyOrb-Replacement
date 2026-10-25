@@ -45,6 +45,17 @@ button.pick{border:1px solid #555;background:#080808;color:#aaa;min-height:47px;
 <button class="action" type="submit">▶ Apply location</button><div id="saveStatus" class="info">Set a location to start tracking aircraft.</div>
 <p class="note">The clock shows UTC until SkyOrb can determine your time zone from the saved location. Daylight saving is refreshed automatically.</p>
 <div class="label">CLOCK FORMAT</div><div class="two"><button class="pick active" type="button" id="format24">24-hour</button><button class="pick" type="button" id="format12">12-hour</button></div>
+<div class="under" style="margin-top:22px"></div><h2 style="margin:8px 0 12px">CLOCK DISPLAY</h2>
+<p class="note">The time zone follows your radar location. Familiar locations show a local abbreviation (PDT, CEST, JST, etc.); other regions show a precise UTC offset.</p>
+<input type="hidden" name="clockOptionsPresent" value="1">
+<label for="clockTzMode">TIME ZONE LABEL</label>
+<select id="clockTzMode" name="clockTzMode"><option value="1">Regional abbreviation (recommended)</option><option value="2">UTC offset (worldwide)</option><option value="0">Hide time zone</option></select>
+<label for="clockDateStyle">DATE FORMAT</label>
+<select id="clockDateStyle" name="clockDateStyle"><option value="0">Full - October 24, 2026</option><option value="1">US - 10/24/2026</option><option value="2">International - 24/10/2026</option><option value="3">ISO - 2026-10-24</option></select>
+<label class="radioLine" style="margin-top:15px"><input type="checkbox" name="clockSeconds" value="1" id="clockSeconds"> Show seconds next to the time (optional)</label>
+<label class="radioLine"><input type="checkbox" name="clockLeadingZero" value="1" id="clockLeadingZero"> Show leading zero in 12-hour time (06:04)</label>
+<button class="action" type="button" id="clockApply">&#9654; Apply clock settings</button>
+<div class="info" id="clockStatus">Clock changes apply immediately without resetting your location or airports. Seconds are off by default.</div>
 <details><summary>Advanced display options</summary><label class="radioLine"><input type="checkbox" id="swapper"> Swap clock and radar physical screens</label>
 <label>Fallback UTC offset (hours)<input id="fallback" type="number" step="0.5" min="-12" max="14" value="0"></label><p class="note">Use only if automatic timezone lookup fails.</p></details>
 </form></section>
@@ -135,7 +146,9 @@ function setPalette(v){if(!/^#[a-f\d]{6}$/i.test(v||''))return;palette=v;documen
 for(let b of $('colors').querySelectorAll('button'))b.classList.toggle('on',b.dataset.c.toLowerCase()===v.toLowerCase());}
 async function config(){try{let d=await api('/api/config');$('lat').value=d.locationSet?d.lat:'';$('lon').value=d.locationSet?d.lon:'';
 locSet=!!d.locationSet;lat=d.lat;lon=d.lon;setRange(d.radius||20);setClock(!!d.clock24);$('swapper').checked=!!d.swap;
-$('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');updateSweepControls(d.sweepTrail??50,d.sweepSeconds??11,d.sweepBrightness??100);airports=d.airports||[];drawAirports();
+$('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');
+ $('clockTzMode').value=d.clockTzMode??1;$('clockDateStyle').value=d.clockDateStyle??0;
+ $('clockSeconds').checked=!!d.clockSeconds;$('clockLeadingZero').checked=!!d.clockLeadingZero;updateSweepControls(d.sweepTrail??50,d.sweepSeconds??11,d.sweepBrightness??100);airports=d.airports||[];drawAirports();
 msg('saveStatus',locSet?'Location saved: '+lat.toFixed(4)+', '+lon.toFixed(4):'No location saved yet. Search an address or enter coordinates, then Apply.');
 }catch(e){msg('saveStatus','Could not load settings: '+e.message,true)}}
 function drawAirports(){let e=$('airports');e.replaceChildren();if(!airports.length){e.textContent='No airports saved.';return;}for(let i=0;i<airports.length;i++){
@@ -150,6 +163,21 @@ msg('geoStatus','✓ Coordinates found. Press APPLY to save the radar location.'
 $('address').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('lookup').click();}};
 for(let b of $('ranges').querySelectorAll('button'))b.onclick=()=>setRange(b.dataset.r);
 $('format24').onclick=()=>setClock(true);$('format12').onclick=()=>setClock(false);
+$('clockApply').onclick=async()=>{
+  const button=$('clockApply');button.disabled=true;msg('clockStatus','Saving clock options...');
+  try{
+    const options=new URLSearchParams({
+      clock24:$('clock24').value,
+      clockSeconds:$('clockSeconds').checked?'1':'0',
+      clockLeadingZero:$('clockLeadingZero').checked?'1':'0',
+      clockTzMode:$('clockTzMode').value,
+      clockDateStyle:$('clockDateStyle').value
+    });
+    const response=await api('/clock/options',{method:'POST',body:options});
+    msg('clockStatus',response.message||'Clock options saved.');
+  }catch(e){msg('clockStatus','Clock update failed: '+e.message,true)}
+  finally{button.disabled=false;}
+};
 $('settings').onsubmit=async e=>{e.preventDefault();let f=new URLSearchParams(new FormData($('settings')));f.set('swap',$('swapper').checked?'1':'0');
 // Checkbox is sent only if selected so that the ESP32 can correctly clear it.
 if(!$('swapper').checked)f.delete('swap');f.set('fallback',$('fallback').value);
