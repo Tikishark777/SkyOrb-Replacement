@@ -1,6 +1,6 @@
 {
-  "name": "SkyOrb Classic \u2014 Flight Radar + Clock",
-  "version": "3.0.0-test",
+  "name": "SkyOrb Community Edition — Flight Radar + International Clock",
+  "version": "3.5.0",
   "new_install_prompt_erase": true,
   "builds": [
     {
