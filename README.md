@@ -2,7 +2,7 @@
 
 **Stable release: v4.0.0 · Hardware-tested · Open source**
 
-**SkyOrb Community Edition** is an independently rebuilt ESP32 aviation desk instrument created and maintained by **John Christensen** ([@Tikishark777](https://github.com/Tikishark777)). It preserves the two-round-display layout and **original wiring** of [GulfCoastMaker's SkyOrb](https://github.com/GulfCoastMaker/SkyOrb), while introducing a replacement aircraft feed, an offline airport catalog, an international clock, configurable radar animation, and **four selectable aviation information views**.
+**SkyOrb Community Edition** is an independently rebuilt ESP32 aviation desk instrument. It preserves the two-round-display layout and **original wiring** of [GulfCoastMaker's SkyOrb](https://github.com/GulfCoastMaker/SkyOrb), while introducing a replacement aircraft feed, an offline airport catalog, an international clock, configurable radar animation, and **four selectable aviation information views**.
 
 **[Install SkyOrb Community Edition — free browser installer and illustrated build guide](https://tikishark777.github.io/SkyOrb-Replacement/)**
 
