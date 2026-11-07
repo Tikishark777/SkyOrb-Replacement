@@ -79,6 +79,9 @@ struct Config {
   int clockTzMode=1;    // 0=hidden, 1=regional abbreviation, 2=UTC offset
   // Radar animation preferences; changes never reset location or flight data.
   int sweepTrail=50, sweepSeconds=11, sweepBrightness=100;
+  // Right-display views: 0 radar, 1 spotlight, 2 summary, 3 METAR, 4 rotate.
+  // Bitmask for rotation: radar=1, spotlight=2, traffic=4, METAR=8.
+  int rightView=0, rightMask=15, rightViewSeconds=20;
   bool locationSet=false, clock24=false, swapScreens=false;
   float fallback=0;                 // UTC offset hours (only if lookup fails)
   int utcOffset=0;                 // derived offset, refreshed for DST
@@ -93,6 +96,16 @@ struct RadarData {
   String source="none", status="Waiting for network";
 };
 RadarData live;
+// METAR data are optional. Never let a missing station interrupt radar traffic.
+struct SkyMetar {
+  String station="",flightCategory="",cover="",visibility="",status="No METAR requested";
+  float temperatureC=NAN,windKt=NAN;
+  int windDir=-1;
+  time_t observedUTC=0;
+  uint32_t fetchedAt=0;
+};
+SkyMetar skyMetar;
+volatile bool askMetar=true, skyViewDirty=true;
 
 static uint16_t green=0x0600, lowgreen=0x01c3, pale=0xd7ff, amber=0xfd28;
 static Adafruit_GC9A01A &clockScreen(const Config &c){return c.swapScreens?radarPhysical:clockPhysical;}
@@ -109,6 +122,7 @@ void savePrefs(){
   prefs.putBool("hasLoc",c.locationSet);prefs.putFloat("lat",c.lat);prefs.putFloat("lon",c.lon);
   prefs.putInt("rad",c.radius);
   prefs.putInt("swTrail",c.sweepTrail);prefs.putInt("swSecs",c.sweepSeconds);prefs.putInt("swBright",c.sweepBrightness);
+  prefs.putInt("rtView",c.rightView);prefs.putInt("rtMask",c.rightMask);prefs.putInt("rtSecs",c.rightViewSeconds);
   prefs.putBool("24h",c.clock24);prefs.putBool("swap",c.swapScreens);
   prefs.putBool("clSec",c.clockSeconds);prefs.putBool("clZero",c.clockLeadingZero);
   prefs.putInt("clDate",c.clockDateStyle);prefs.putInt("clZone",c.clockTzMode);
@@ -128,6 +142,9 @@ void loadPrefs(){
   cfg.sweepTrail=clampI(prefs.getInt("swTrail",50),0,100);
   cfg.sweepSeconds=clampI(prefs.getInt("swSecs",11),5,20);
   cfg.sweepBrightness=clampI(prefs.getInt("swBright",100),20,100);
+  cfg.rightView=clampI(prefs.getInt("rtView",0),0,4);
+  cfg.rightMask=clampI(prefs.getInt("rtMask",15),1,15);
+  cfg.rightViewSeconds=clampI(prefs.getInt("rtSecs",20),10,60);
   cfg.clock24=prefs.getBool("24h",false);cfg.swapScreens=prefs.getBool("swap",false);
   cfg.clockSeconds=prefs.getBool("clSec",false);
   cfg.clockLeadingZero=prefs.getBool("clZero",false);
@@ -301,7 +318,7 @@ void fetchFlights(){
     live.updatedAt=millis();live.httpCode=code;live.source=providers[source];
     live.status=count?"Tracking aircraft":"Connected; no aircraft currently in range";
     xSemaphoreGive(guard);
-    radarSceneDirty=true;
+    radarSceneDirty=true;skyViewDirty=true;
     Serial.printf("[Flights] %s: %d nearby aircraft\n",providers[source].c_str(),count);
     return;
   }
@@ -309,11 +326,78 @@ void fetchFlights(){
   live.count=0;live.httpCode=lastCode;live.source="none";
   live.status="Flight-data request failed (see Serial / API status)";
   xSemaphoreGive(guard);
-  radarSceneDirty=true;
+  radarSceneDirty=true;skyViewDirty=true;
+}
+
+
+// Find a few nearby 4-letter ICAO airports from the existing offline catalogue.
+// A single small METAR query is much lighter than a global observation feed.
+void fetchSkyMetar(){
+  Config c=copyCfg();
+  if(!c.locationSet||WiFi.status()!=WL_CONNECTED)return;
+  constexpr int CANDIDATES=10;
+  struct Site {int index;float miles;};
+  Site closest[CANDIDATES];int found=0;
+  for(size_t i=0;i<AIRPORT_CATALOG_COUNT;i++){
+    const AirportRecord &rec=AIRPORT_CATALOG[i];
+    const char *id=rec.icao;
+    if(!id||strlen(id)!=4)continue;
+    bool valid=true;
+    for(int j=0;j<4;j++)if(id[j]<'A'||id[j]>'Z'){valid=false;break;}
+    if(!valid)continue;
+    float mi=airportDistanceMiles(rec.latE5*.00001f,rec.lonE5*.00001f,c);
+    if(mi>125.0f)continue;
+    int at=0;while(at<found&&mi>=closest[at].miles)at++;
+    if(at>=CANDIDATES)continue;
+    if(found<CANDIDATES)found++;
+    for(int j=found-1;j>at;j--)closest[j]=closest[j-1];
+    closest[at]={(int)i,mi};
+  }
+  SkyMetar result;
+  if(!found){result.status="No nearby reporting airport in the catalog";}
+  else{
+    String ids;
+    for(int i=0;i<found;i++){
+      if(i)ids+=",";
+      ids+=AIRPORT_CATALOG[closest[i].index].icao;
+    }
+    JsonDocument doc;int code=0;
+    const String url="https://aviationweather.gov/api/data/metar?ids="+ids+"&format=json";
+    if(getJsonHTTPS(url,doc,code)){
+      JsonArray reports=doc.as<JsonArray>();
+      float nearest=9999.0f;
+      time_t utc=time(nullptr);
+      for(JsonObject ob:reports){
+        const String id=ob["icaoId"].as<String>();
+        if(id.length()!=4||ob["lat"].isNull()||ob["lon"].isNull())continue;
+        time_t obs=(time_t)(ob["obsTime"]|0L);
+        if(utc>1700000000 && (obs<utc-3*3600||obs>utc+600))continue;
+        float miles=airportDistanceMiles(ob["lat"].as<float>(),ob["lon"].as<float>(),c);
+        if(miles<nearest){
+          nearest=miles;
+          result.station=id;
+          result.flightCategory=ob["fltCat"].as<String>();
+          result.cover=ob["cover"].as<String>();
+          result.visibility=ob["visib"].as<String>();
+          result.temperatureC=ob["temp"].isNull()?NAN:ob["temp"].as<float>();
+          result.windKt=ob["wspd"].isNull()?NAN:ob["wspd"].as<float>();
+          result.windDir=ob["wdir"].isNull()?-1:ob["wdir"].as<int>();
+          result.observedUTC=obs;
+          result.fetchedAt=millis();
+          result.status="Latest nearby airport report";
+        }
+      }
+      if(!result.station.length())result.status="No recent METAR at nearby stations";
+    }else if(code==204){result.status="No nearby METAR reported";}
+    else result.status="Weather service unavailable (HTTP "+String(code)+")";
+  }
+  xSemaphoreTake(guard,portMAX_DELAY);skyMetar=result;xSemaphoreGive(guard);
+  skyViewDirty=true;
+  Serial.printf("[METAR] %s / %s\n",result.station.c_str(),result.status.c_str());
 }
 
 void worker(void*){
-  uint32_t lastFlights=0,lastTZ=0;
+  uint32_t lastFlights=0,lastTZ=0,lastMetarAttempt=0;
   for(;;){
     if(WiFi.status()==WL_CONNECTED){
       if(askTZ || (lastTZ==0 && copyCfg().locationSet) || (lastTZ && millis()-lastTZ>TZ_PERIOD)){
@@ -322,6 +406,13 @@ void worker(void*){
       if(askAirports){askAirports=false;discoverAirports();}
       if(askFlights || !lastFlights || millis()-lastFlights>=FETCH_PERIOD){
         askFlights=false;fetchFlights();lastFlights=millis();
+      }
+      Config viewCfg=copyCfg();
+      bool weatherWanted=viewCfg.locationSet &&
+          (viewCfg.rightView==3 || (viewCfg.rightView==4 && (viewCfg.rightMask&8)));
+      if(weatherWanted &&
+          (askMetar || !lastMetarAttempt || millis()-lastMetarAttempt>=15UL*60UL*1000UL)){
+        askMetar=false;lastMetarAttempt=millis();fetchSkyMetar();
       }
     }
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -338,6 +429,7 @@ void publishConfig(){
   d["clockSeconds"]=c.clockSeconds;d["clockLeadingZero"]=c.clockLeadingZero;
   d["clockDateStyle"]=c.clockDateStyle;d["clockTzMode"]=c.clockTzMode;
   d["sweepTrail"]=c.sweepTrail;d["sweepSeconds"]=c.sweepSeconds;d["sweepBrightness"]=c.sweepBrightness;
+  d["rightView"]=c.rightView;d["rightMask"]=c.rightMask;d["rightViewSeconds"]=c.rightViewSeconds;
   d["accent"]=c.accent;d["timezone"]=c.tzName;d["timezoneAbbr"]=c.tzAbbr;d["fallback"]=c.fallback;d["otaEnabled"]=c.otaPassword.length()>=8;
   JsonArray a=d["airports"].to<JsonArray>();
   for(int i=0;i<c.airportCount;i++){
@@ -370,6 +462,7 @@ void publishLive(){
   d["count"]=stale?0:live.count;
   d["status"]=!c.locationSet?"Set your location to start":(stale?"Flight data stale; checking connection":live.status);
   d["source"]=live.source;d["httpCode"]=live.httpCode;
+  d["metarStation"]=skyMetar.station;d["metarStatus"]=skyMetar.status;
   d["ageSeconds"]=live.updatedAt?(int)((millis()-live.updatedAt)/1000):-1;
   JsonArray flights=d["flights"].to<JsonArray>();
   for(int i=0;i<(stale?0:live.count);i++){
@@ -400,9 +493,9 @@ void onSave(){
   }
   cfg.accent=accent;cfg.fallback=clampF(server.arg("fallback").toFloat(),-12,14);
   cfg.locationSet=true;
-  if(moved){cfg.tzName="UTC fallback";cfg.tzAbbr="UTC";cfg.utcOffset=roundf(cfg.fallback*3600);cfg.airportCount=0;}
+  if(moved){cfg.tzName="UTC fallback";cfg.tzAbbr="UTC";cfg.utcOffset=roundf(cfg.fallback*3600);cfg.airportCount=0;skyMetar=SkyMetar();}
   xSemaphoreGive(guard);
-  savePrefs();radarSceneDirty=true;askFlights=true;askTZ=true;if(moved)askAirports=true;
+  savePrefs();radarSceneDirty=true;skyViewDirty=true;askFlights=true;askTZ=true;if(moved){askAirports=true;askMetar=true;}
   JsonDocument d;d["ok"]=true;
   d["message"]="Location saved. The radar will request nearby flights; airports and timezone update in the background.";
   replyJson(d);
@@ -611,6 +704,25 @@ void initWeb(){
   server.on("/airport/clear",HTTP_POST,[](){
     xSemaphoreTake(guard,portMAX_DELAY);cfg.airportCount=0;xSemaphoreGive(guard);
     savePrefs();radarSceneDirty=true;JsonDocument d;d["ok"]=true;replyJson(d);
+  });
+  // View-only settings never touch center, Wi-Fi, airports or clock.
+  server.on("/radar/view",HTTP_POST,[](){
+    if(!server.hasArg("view")||!server.hasArg("mask")||!server.hasArg("seconds")){
+      errorJson("Missing view selection.");return;
+    }
+    const int view=server.arg("view").toInt();
+    const int mask=server.arg("mask").toInt();
+    const int seconds=server.arg("seconds").toInt();
+    if(view<0||view>4||mask<1||mask>15||seconds<10||seconds>60){
+      errorJson("Invalid view, rotation mask, or interval.");return;
+    }
+    xSemaphoreTake(guard,portMAX_DELAY);
+    cfg.rightView=view;cfg.rightMask=mask;cfg.rightViewSeconds=seconds;
+    xSemaphoreGive(guard);
+    skyViewDirty=true;
+    if(view==3||(view==4&&(mask&8)))askMetar=true;
+    savePrefs();JsonDocument d;d["ok"]=true;
+    d["message"]="Right-screen views saved. No restart needed.";replyJson(d);
   });
   // Dedicated endpoint. Does not modify center, radius, airports, or Wi-Fi.
   server.on("/radar/sweep",HTTP_POST,[](){
@@ -994,8 +1106,117 @@ static void drawBufferedSweep(Adafruit_GFX &t,float sweep,const Config &c){
                   lroundf(120-SWEEP_LENGTH*cosf(angle)),(uint16_t)(green6<<5));
   }
 }
+
+// Alternate views only redraw on data/mode changes or at a slow heartbeat.
+// The original 70-ms buffered radar path remains untouched in radar mode.
+static int skyLastOtherView=-1;
+static uint32_t skyLastDrawAt=0;
+static int activeSkyView(const Config &c){
+  if(c.rightView!=4)return c.rightView;
+  int choices[4],n=0;
+  for(int i=0;i<4;i++)if(c.rightMask&(1<<i))choices[n++]=i;
+  if(!n)return 0;
+  return choices[(millis()/((uint32_t)c.rightViewSeconds*1000UL))%n];
+}
+static float skyDistanceMiles(const Aircraft &a,const Config &c){
+  const float dy=(a.lat-c.lat)*69.0f;
+  const float dx=(a.lon-c.lon)*69.0f*cosf(c.lat*DEG2RAD);
+  return sqrtf(dx*dx+dy*dy);
+}
+static void skyFrame(Adafruit_GFX &t,const String &title,uint16_t color){
+  t.fillScreen(0);
+  t.drawCircle(120,120,113,color);
+  t.drawCircle(120,120,108,0x20c4);
+  t.drawFastHLine(54,56,132,0x18a3);
+  center(t,title,31,1,color);
+}
+static void drawAlternateSkyView(const Config &c,Adafruit_GC9A01A &screen,int mode){
+  const uint32_t now=millis();
+  if(mode==skyLastOtherView&&!skyViewDirty&&now-skyLastDrawAt<60000UL)return;
+  skyLastOtherView=mode;skyLastDrawAt=now;skyViewDirty=false;
+  uint16_t greenText=0x5fcf, white=0xffff, amberText=0xfd28;
+  if(mode==3){
+    SkyMetar met;
+    xSemaphoreTake(guard,portMAX_DELAY);met=skyMetar;xSemaphoreGive(guard);
+    skyFrame(screen,"AIRPORT WEATHER",0x66fb);
+    if(!c.locationSet){center(screen,"SAVE A LOCATION",107,1,white);return;}
+    if(!met.station.length()){
+      center(screen,"NO RECENT METAR",98,2,amberText);
+      center(screen,"CHECK STATION COVERAGE",135,1,white);
+      center(screen,"RADAR STILL ACTIVE",159,1,greenText);
+      return;
+    }
+    String title=met.station;
+    if(met.flightCategory.length())title+="  "+met.flightCategory;
+    center(screen,title,65,2,white);
+    String degrees=isnan(met.temperatureC)?"--":String((int)lroundf(met.temperatureC*1.8f+32.0f));
+    center(screen,degrees+" F",98,3,amberText);
+    String wind="WIND ";
+    if(isnan(met.windKt))wind+="--";
+    else{
+      wind+=(met.windDir<0?String("VRB"):String(met.windDir));
+      wind+=" / ";wind+=String((int)lroundf(met.windKt));wind+=" KT";
+    }
+    if(wind.length()>26)wind.remove(26);
+    center(screen,wind,146,1,white);
+    String vis="VIS "+(met.visibility.length()?met.visibility:"--")+" SM";
+    if(vis.length()>24)vis.remove(24);
+    center(screen,vis,165,1,white);
+    String cover=met.cover.length()?met.cover:"CLOUDS N/A";
+    center(screen,cover,184,1,greenText);
+    if(met.observedUTC>0 && time(nullptr)>1700000000){
+      long age=(long)(time(nullptr)-met.observedUTC)/60L;
+      center(screen,"METAR "+String(max(0L,age))+" MIN OLD",204,1,0x8c71);
+    }else center(screen,"METAR OBSERVATION",204,1,0x8c71);
+    return;
+  }
+  int count=0,highest=-1,fastest=-1;
+  float nearest=1e9f,highAlt=-1e9f,fastKn=-1e9f;
+  Aircraft closest;
+  uint32_t lastUpdate=0;
+  xSemaphoreTake(guard,portMAX_DELAY);
+  lastUpdate=live.updatedAt;
+  if(lastUpdate && now-lastUpdate<=150000UL){
+    count=live.count;
+    for(int i=0;i<count;i++){
+      const Aircraft &p=live.flights[i];
+      float mi=skyDistanceMiles(p,c);
+      if(mi<nearest){nearest=mi;closest=p;}
+      if(!p.ground && p.altitude>highest){highAlt=p.altitude;highest=p.altitude;}
+      if(p.speed>fastKn){fastKn=p.speed;fastest=(int)lroundf(p.speed);}
+    }
+  }
+  xSemaphoreGive(guard);
+  if(mode==1){
+    skyFrame(screen,"AIRCRAFT SPOTLIGHT",greenText);
+    if(!c.locationSet){center(screen,"SAVE A LOCATION",113,1,white);return;}
+    if(!count){center(screen,"NO AIRCRAFT IN RANGE",110,1,amberText);center(screen,"LIVE RADAR CONTINUES",146,1,greenText);return;}
+    String label=closest.flight.length()?closest.flight:(closest.reg.length()?closest.reg:closest.hex);
+    if(label.length()>11)label.remove(11);
+    center(screen,label,69,2,white);
+    if(closest.reg.length())center(screen,closest.reg,95,1,0x9db4);
+    center(screen,closest.ground?"GROUND":String(closest.altitude)+" FT",116,2,amberText);
+    center(screen,String((int)lroundf(closest.speed))+" KT",150,2,white);
+    center(screen,String(nearest,1)+" MI AWAY",183,1,greenText);
+    center(screen,"HDG "+String((int)lroundf(closest.heading))+" DEG",203,1,greenText);
+  }else{
+    skyFrame(screen,"TRAFFIC SUMMARY",greenText);
+    if(!c.locationSet){center(screen,"SAVE A LOCATION",113,1,white);return;}
+    center(screen,String(count),67,4,white);
+    center(screen,"AIRCRAFT IN RANGE",118,1,greenText);
+    if(count){
+      center(screen,"NEAREST  "+String(nearest,1)+" MI",147,1,white);
+      center(screen,highest<0?"HIGHEST  --":"HIGHEST  "+String(highest)+" FT",174,1,amberText);
+      center(screen,fastest<0?"FASTEST  --":"FASTEST  "+String(fastest)+" KT",199,1,white);
+    }else center(screen,"WAITING FOR AIRCRAFT",171,1,amberText);
+  }
+}
+
 void renderRadar(const Config &c){
   Adafruit_GC9A01A &display=radarScreen(c);
+  const int chosen=activeSkyView(c);
+  if(chosen!=0){drawAlternateSkyView(c,display,chosen);return;}
+  skyLastOtherView=-1;
   if(!radarCanvas){
     // Fail safely and clearly: static scene, NOT flashing or ghosting rays.
     if(!radarMemoryWarningShown || radarSceneDirty){
