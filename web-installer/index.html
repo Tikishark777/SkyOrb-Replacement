@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#081619">
-  <meta name="description" content="SkyOrb Community Edition by John Christensen: independently rebuilt dual-display ESP32 aircraft radar and international clock. Free wiring guide, browser installer, aircraft and airport tracking, sweep presets and clock settings.">
-  <title>SkyOrb Community Edition — ESP32 Flight Radar + Clock</title>
+  <meta name="description" content="SkyOrb Community Edition v4.0 stable: build an ESP32 dual-round-display flight radar, aircraft spotlight, traffic summary, METAR weather station, and international clock. Free browser installer, wiring and phone setup.">
+  <title>SkyOrb Community Edition v4.0 — Flight Radar, Aircraft Views &amp; Clock</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
   <style>
     :root{--bg:#081619;--deep:#0c1d20;--card:#102428;--card2:#142d30;--line:#284349;--white:#edf4ed;--muted:#a2b6b2;--mint:#90eec4;--green:#55d7a5;--amber:#ffc184;--orange:#f9a45e;--red:#f3a88d;--radius:18px;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -26,6 +26,27 @@
     @media(max-width:950px){.hero{grid-template-columns:1fr;gap:5px;padding-top:58px}.hero-art{min-height:370px;max-width:620px;width:100%;margin-inline:auto}.display.radar{right:9%}.display.clock{left:15%}.cards{grid-template-columns:repeat(2,1fr)}.navlinks{gap:14px}.navlinks a{font-size:.79rem}}
     @media(max-width:710px){.wrap{padding-inline:19px}.bar{min-height:70px}.navlinks a:not(.github){display:none}.navlinks a.github{padding:7px 9px}.hero{padding:52px 0 46px}h1{font-size:clamp(3rem,11vw,4.1rem)}.hero-art{min-height:290px}.display.radar{width:245px;right:3%;top:5px}.display.clock{width:194px;left:3%;bottom:6px}.clock-top{font-size:2rem}.band .row{grid-template-columns:repeat(2,1fr);gap:20px 0}.stat:nth-child(3){border-left:0;padding-left:0}.stat strong{font-size:.83rem}section{padding-block:57px}.section-top{display:block}.section-copy{margin:16px 0 0}.wiring-layout,.install-grid,.credits,.faq-list{grid-template-columns:1fr}.setup-grid{grid-template-columns:1fr}.credits{padding:25px}.cards{grid-template-columns:1fr 1fr}.card{padding:20px}.card .number{margin-bottom:17px}.wiring-header{padding:16px}th,td{padding:10px 16px}td{font-size:.82rem}td:nth-child(2){font-size:.78rem}}
     @media(max-width:420px){.hero-art{min-height:245px}.display.radar{width:210px}.display.clock{width:155px}.clock-top{font-size:1.5rem}.clock-day{font-size:.61rem}.clock-date{font-size:.58rem}.clock-tz{font-size:.63rem}.cards{grid-template-columns:1fr}.identity strong{font-size:.98rem}.hero .actions{flex-direction:column}.hero .button{width:100%}}
+
+
+    /* v4.0 aviation views — compact round previews sized for the original hardware */
+    .aviation-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px}
+    .av-card{border:1px solid var(--line);border-radius:var(--radius);padding:22px 16px 24px;background:linear-gradient(155deg,#122c2d,#0a1c20);min-width:0}
+    .av-card h3{margin:8px 0 10px;font-size:1.04rem}.av-card p:not(.av-step){font-size:.85rem;color:#bdd1c9;line-height:1.75;margin:0}
+    .av-step{font:700 .64rem var(--mono);letter-spacing:.08em;color:var(--amber);margin:17px 0 0}
+    .av-screen{position:relative;isolation:isolate;width:min(185px,100%);aspect-ratio:1;margin:auto;background:radial-gradient(circle at center,#0b2318 1%,#03120c 73%);border:7px solid #20383b;border-radius:50%;box-shadow:0 0 0 1px #55736c,inset 0 0 14px #0009;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+    .av-rings{position:absolute;inset:8%;border-radius:50%;background:repeating-radial-gradient(circle,#0000 0 22px,#1e6642 23px 24px,#0000 25px 48px);opacity:.82}.av-cross{position:absolute;inset:9%;background:linear-gradient(90deg,transparent 49.6%,#1b5b3b 50%,transparent 50.4%),linear-gradient(0deg,transparent 49.6%,#1b5b3b 50%,transparent 50.4%)}
+    .av-mini{position:relative;z-index:2;font:700 .51rem var(--mono);letter-spacing:.06em;color:#83d3ab}.av-mini-top{position:absolute;top:15%;color:#8de4bb}.av-mini-bottom{position:absolute;bottom:14%;color:var(--amber)}
+    .av-sweep{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 15deg,transparent 0deg 285deg,#27dc8338 335deg,#73ecac82 359deg,transparent 360deg);animation:spin 13s linear infinite}
+    .av-blip{position:absolute;font-size:.8rem;color:#b1f9d0;text-shadow:0 0 7px #77e2ad;z-index:3}.blip-one{top:31%;left:49%;transform:rotate(35deg)}.blip-two{bottom:26%;left:34%;transform:rotate(-35deg)}
+    .av-info-screen{background:radial-gradient(circle at 50% 35%,#132f28,#061611 76%);gap:8px}.av-info-screen .av-mini{color:#8de4bb;text-align:center;max-width:90%;font-size:.49rem}
+    .av-big{font:800 1.13rem var(--mono);letter-spacing:-.04em;color:#f4faf4;line-height:1}.av-mids{font:700 .57rem var(--mono);color:#98e4b5;text-align:center;max-width:90%}.av-divider{width:61%;height:1px;background:#376b58}.av-foot{font:600 .5rem var(--mono);color:#e9be78;text-align:center;max-width:90%}
+    .av-weather-screen{background:radial-gradient(circle at 45% 38%,#193b46,#081720 74%)}.av-weather-screen .av-mini,.av-weather-screen .av-mids{color:#9bddec}
+    .av-demo-note{text-align:center;color:var(--muted);font-size:.75rem;margin:15px 0 0}
+    .rotation-band{display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:25px;align-items:center;border:1px solid #477969;border-radius:var(--radius);background:linear-gradient(115deg,#173833,#102727);padding:27px 30px;margin-top:28px}
+    .rotation-band h3{font-size:1.35rem;margin:3px 0 11px}.rotation-band p:last-child{color:#c6d9ce;font-size:.9rem;margin:0}
+    .rotation-mark{width:84px;height:84px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:2px solid #6dbda3;border-radius:50%;color:var(--mint);font-size:2.8rem;line-height:1}.rotation-mark small{font:.7rem var(--mono);color:var(--amber);margin-top:1px}
+    @media(max-width:1000px){.aviation-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.av-screen{width:min(185px,76%)}}
+    @media(max-width:520px){.aviation-cards{grid-template-columns:1fr;gap:15px}.av-card{padding:22px}.av-card h3{font-size:1.06rem}.av-card p:not(.av-step){font-size:.89rem}.av-screen{width:min(185px,80%);border-width:6px}.av-big{font-size:1.13rem}.av-mini{font-size:.51rem}.av-mids,.av-foot{font-size:.55rem}.rotation-band{grid-template-columns:1fr;padding:22px}.rotation-mark{display:none}}
   </style>
 </head>
 <body>
@@ -37,7 +58,7 @@
         <span><strong>SKYORB</strong><small>Community Edition</small></span>
       </a>
       <nav class="navlinks" aria-label="Main navigation">
-        <a href="#parts">Parts</a><a href="#wiring">Wiring</a><a href="#install">Installer</a><a href="#setup">Setup</a><a href="#clock">Clock</a><a href="#credits">Credits</a>
+        <a href="#parts">Parts</a><a href="#wiring">Wiring</a><a href="#install">Installer</a><a href="#views">Views</a><a href="#clock">Clock</a><a href="#credits">Credits</a>
         <a class="github" href="https://github.com/Tikishark777/SkyOrb-Replacement" target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
       </nav>
     </div>
@@ -45,12 +66,12 @@
   <main id="main">
     <div id="top" class="wrap hero">
       <div>
-        <p class="eyebrow">Open-source aircraft tracking · ESP32</p>
+        <p class="eyebrow">v4.0 stable · Open-source aircraft tracking · ESP32</p>
         <h1>A little radar.<br><em>A lot of sky.</em></h1>
-        <p class="lead">Build a live aircraft radar and clock for your desk using one ESP32 and two round displays. Install from your browser, set your location on your phone, tune the radar sweep, choose your international clock format, and watch nearby flights.</p>
+        <p class="lead">Build a desk-sized aviation information station with one ESP32 and two round displays. Track live aircraft, spotlight nearby flights, compare air traffic, check airport weather, or rotate the views—all alongside an international clock. Install from your browser and customize everything from your phone.</p>
         <p class="subline">COMMUNITY REBUILD BY JOHN CHRISTENSEN · GITHUB @TIKISHARK777</p>
         <div class="actions"><a class="button" href="#install">Install firmware <span class="chevron">↗</span></a><a class="button secondary" href="#wiring">See wiring guide <span class="chevron">↓</span></a></div>
-        <p class="tagline">Ground-up community firmware rebuild inspired by GulfCoastMaker's original SkyOrb. The original dual-display wiring stays the same.</p>
+        <p class="tagline">Hardware-tested stable release · Four optional aviation views · Original SkyOrb-compatible wiring · No coding required to install.</p>
       </div>
       <div class="hero-art" role="img" aria-label="Illustration of two round displays: an animated green aircraft radar and a white and amber digital clock">
         <div class="display clock" aria-hidden="true"><span class="clock-top">10:24</span><span class="clock-tz">PDT</span><span class="clock-day">SATURDAY</span><span class="clock-date">OCT 24, 2026</span></div>
@@ -58,7 +79,7 @@
         <span class="signal">DISPLAY ILLUSTRATION · NOT LIVE DATA</span>
       </div>
     </div>
-    <div class="band"><div class="wrap row"><div class="stat"><strong>2 × GC9A01</strong><span>240 × 240 round displays</span></div><div class="stat"><strong>1 × ESP32</strong><span>Original 30-pin board</span></div><div class="stat"><strong>5–30 MILES</strong><span>Selectable radar radius</span></div><div class="stat"><strong>NO CODING</strong><span>Browser flashing + phone setup</span></div></div></div>
+    <div class="band"><div class="wrap row"><div class="stat"><strong>2 × GC9A01</strong><span>240 × 240 round displays</span></div><div class="stat"><strong>1 × ESP32</strong><span>Original 30-pin board</span></div><div class="stat"><strong>4 AVIATION VIEWS</strong><span>Radar, flights, summary &amp; METAR</span></div><div class="stat"><strong>NO CODING</strong><span>Browser flashing + phone setup</span></div></div></div>
     <section id="parts" class="wrap">
       <div class="section-top"><div><p class="kicker">01 / Gather your kit</p><h2>What you'll need.</h2></div><p class="section-copy">You can assemble the project with a screw-terminal breakout board and a few wires. A 3D-printed SkyOrb housing is available from TopherPrints on MakerWorld.</p></div>
       <div class="cards">
@@ -95,11 +116,44 @@
     </section>
     <section id="setup" class="wrap">
       <div class="section-top"><div><p class="kicker">04 / Configure your radar</p><h2>Then use your phone.</h2></div><p class="section-copy">Setup happens over Wi-Fi, not over the USB installer. Your ESP32 connects to a 2.4 GHz home network and then serves its own local settings dashboard.</p></div>
-      <div class="setup-grid"><div class="setup-card"><div class="phase">STEP 01 — CONNECT</div><h3>Join the setup hotspot</h3><p>On your phone, join Wi-Fi <code>SKYORB-Setup</code> using password <span class="key">SKYORB1234</span>.</p></div><div class="setup-card"><div class="phase">STEP 02 — SAVE WIFI</div><h3>Select your home network</h3><p>If the captive portal doesn't pop up, browse to <code>http://192.168.4.1/setup</code>. Pick your 2.4 GHz Wi-Fi network and save its password.</p></div><div class="setup-card"><div class="phase">STEP 03 — CUSTOMIZE</div><h3>Open your dashboard</h3><p>Reconnect your phone to your normal home Wi-Fi, then open the <strong>numeric IP address shown on SkyOrb</strong>. Choose your address, radar radius, airports, colors, custom radar sweep, and international clock settings.</p></div></div>
+      <div class="setup-grid"><div class="setup-card"><div class="phase">STEP 01 — CONNECT</div><h3>Join the setup hotspot</h3><p>On your phone, join Wi-Fi <code>SKYORB-Setup</code> using password <span class="key">SKYORB1234</span>.</p></div><div class="setup-card"><div class="phase">STEP 02 — SAVE WIFI</div><h3>Select your home network</h3><p>If the captive portal doesn't pop up, browse to <code>http://192.168.4.1/setup</code>. Pick your 2.4 GHz Wi-Fi network and save its password.</p></div><div class="setup-card"><div class="phase">STEP 03 — CUSTOMIZE</div><h3>Open your dashboard</h3><p>Reconnect your phone to your normal home Wi-Fi, then open the <strong>numeric IP address shown on SkyOrb</strong>. Choose your address, radar radius, offline airport discovery, aviation views, custom screen rotation, radar sweep, and international clock settings.</p></div></div>
       <p class="note wifi-tip"><strong>Can't open the dashboard?</strong> <code>http://skyorb.local/</code> sometimes works, but the on-screen IP address is more reliable. Your phone/computer and SkyOrb must be on the same local network. For example, a device on <code>10.0.0.x</code> might not reach one on <code>192.168.86.x</code>. If the setup hotspot disappears, restart SkyOrb and reconnect.</p>
     </section>
-    <section id="sweep" class="wrap">
-      <div class="section-top"><div><p class="kicker">05 / Make it yours</p><h2>Your radar, your sweep.</h2></div><p class="section-copy">SkyOrb Community Edition includes adjustable radar animation. Pick a preset, then fine-tune the green sweep right from the local settings dashboard. No coding or repeat flashing required.</p></div>
+  
+  <section id="views" class="wrap">
+    <div class="section-top">
+      <div><p class="kicker">05 / Four ways to watch the sky</p><h2>More than a radar.</h2></div>
+      <p class="section-copy">The right-hand display now has four aviation views. Keep the familiar animated radar all the time, pick a favorite information screen, or rotate only the views you want. The left clock continues running.</p>
+    </div>
+    <div class="aviation-cards">
+      <article class="av-card">
+        <div class="av-screen" aria-hidden="true"><div class="av-rings"></div><div class="av-cross"></div><span class="av-mini av-mini-top">LIVE RADAR</span><span class="av-sweep"></span><span class="av-blip blip-one">✈</span><span class="av-blip blip-two">✈</span><span class="av-mini av-mini-bottom">20 MI</span></div>
+        <p class="av-step">01 / THE ORIGINAL</p><h3>Live Aircraft Radar</h3>
+        <p>Watch nearby ADS-B-equipped aircraft around your selected location with adjustable 5, 10, 20 or 30-mile range, airport markers and a configurable green radar sweep.</p>
+      </article>
+      <article class="av-card">
+        <div class="av-screen av-info-screen" aria-hidden="true"><span class="av-mini">AIRCRAFT SPOTLIGHT</span><strong class="av-big">FLIGHT</strong><span class="av-mids">ALT · SPEED · HDG</span><span class="av-divider"></span><span class="av-foot">NEAREST AIRCRAFT</span></div>
+        <p class="av-step">02 / ONE AIRCRAFT AT A TIME</p><h3>Aircraft Spotlight</h3>
+        <p>Highlight the nearest reported aircraft and read its flight identifier, altitude, speed, heading and distance from your saved radar center.</p>
+      </article>
+      <article class="av-card">
+        <div class="av-screen av-info-screen" aria-hidden="true"><span class="av-mini">TRAFFIC SUMMARY</span><strong class="av-big">AIRCRAFT</strong><span class="av-mids">COUNT · NEAREST</span><span class="av-divider"></span><span class="av-foot">HIGHEST · FASTEST</span></div>
+        <p class="av-step">03 / THE BIG PICTURE</p><h3>Traffic Summary</h3>
+        <p>See how many aircraft are nearby, along with the closest flight, the highest reported altitude and the fastest reported aircraft.</p>
+      </article>
+      <article class="av-card">
+        <div class="av-screen av-info-screen av-weather-screen" aria-hidden="true"><span class="av-mini">AIRPORT WEATHER</span><strong class="av-big">METAR</strong><span class="av-mids">TEMP · WIND</span><span class="av-divider"></span><span class="av-foot">VISIBILITY · CLOUDS</span></div>
+        <p class="av-step">04 / REPORTED CONDITIONS</p><h3>Airport Weather</h3>
+        <p>Check a recent METAR observation from a nearby reporting airport: temperature, wind, visibility, cloud cover and flight category when available.</p>
+      </article>
+    </div>
+    <p class="av-demo-note">Circular previews are illustrations, not live data. Actual readings depend on reception, available reports and the selected location.</p>
+    <div class="rotation-band"><div><p class="kicker">YOUR RIGHT SCREEN · YOUR CHOICE</p><h3>Rotate selected views</h3><p>Open <strong>RIGHT SCREEN VIEWS</strong> in your phone dashboard. Choose <strong>Rotate selected views</strong>, check any combination of Radar, Spotlight, Summary and Weather, then select 10, 15, 20, 30, 45 or 60 seconds per view. Press <strong>Apply right-screen mode</strong>; your selection is remembered after restarts. Radar only remains the default.</p></div><div class="rotation-mark" aria-hidden="true">↻<small>10–60s</small></div></div>
+    <p class="note" style="margin-top:16px"><strong>METAR accuracy:</strong> Airport Weather is an observation, not a general forecast or real-time view of every airport. The ESP32 checks nearby reporting stations periodically when weather is enabled. Stations without recent reports show an unavailable message; do not use any of these screens for flight operations or navigation. <a href="https://aviationweather.gov/data/api/" target="_blank" rel="noopener noreferrer">Aviation Weather Center data information ↗</a></p>
+  </section>
+
+  <section id="sweep" class="wrap">
+      <div class="section-top"><div><p class="kicker">06 / Make it yours</p><h2>Your radar, your sweep.</h2></div><p class="section-copy">SkyOrb Community Edition includes adjustable radar animation. Pick a preset, then fine-tune the green sweep right from the local settings dashboard. No coding or repeat flashing required.</p></div>
       <div class="setup-grid">
         <div class="setup-card"><div class="phase">PRESET 01 / CRISP</div><h3>Clean single-line sweep</h3><p>One rotating green line with no intentionally drawn trailing rays. Choose this to minimize the programmed ghosting effect.</p></div>
         <div class="setup-card"><div class="phase">PRESET 02 / CLASSIC</div><h3>Traditional radar trail</h3><p>The familiar fading-sweep look. A balanced starting point for builders who like the current radar effect.</p></div>
@@ -108,7 +162,7 @@
       <p class="note wifi-tip"><strong>How to customize:</strong> After connecting SkyOrb to Wi-Fi, open its numeric IP address in a phone or computer browser on the same network. Find <strong>RADAR SWEEP</strong>, choose Crisp, Classic, or Glow, or adjust the <strong>trail, rotation speed, and brightness</strong> sliders. Tap <strong>Apply</strong> to change the physical radar immediately; your preferences are saved for future restarts. A small amount of hardware/display-motion ghosting may remain even with the software trail off.</p>
     </section>
     <section id="clock" class="wrap">
-      <div class="section-top"><div><p class="kicker">06 / International time and date</p><h2>A clock for wherever you are.</h2></div><p class="section-copy">The second round display shows local time and date using the radar location you choose. Make the clock your own from the same phone dashboard, without editing code or reflashing.</p></div>
+      <div class="section-top"><div><p class="kicker">07 / International time and date</p><h2>A clock for wherever you are.</h2></div><p class="section-copy">The second round display shows local time and date using the radar location you choose. Make the clock your own from the same phone dashboard, without editing code or reflashing.</p></div>
       <div class="setup-grid">
         <div class="setup-card"><div class="phase">TIME ZONES / WORLDWIDE</div><h3>Your local time, clearly labeled</h3><p>Automatically detects the time zone from the saved location. Show a familiar regional abbreviation where available, a precise UTC offset for international locations, or hide the label entirely. Daylight-saving offsets refresh periodically.</p></div>
         <div class="setup-card"><div class="phase">FORMAT / YOUR CHOICE</div><h3>12 or 24 hours</h3><p>Pick 12-hour or 24-hour time, optionally include a leading zero, and enable or disable smaller seconds digits. Seconds are off by default to keep the classic appearance.</p></div>
@@ -117,8 +171,15 @@
       <p class="note wifi-tip"><strong>How to customize:</strong> Open SkyOrb's local settings page and find <strong>CLOCK DISPLAY</strong>. Choose your date format, seconds, leading zero, and time-zone label, then tap <strong>Apply clock settings</strong>. The clock uses your saved radar location; settings are remembered after a restart. Time-zone abbreviations may vary by region, so UTC offset is always a useful alternative.</p>
     </section>
     <section id="help" class="wrap">
-      <div class="section-top"><div><p class="kicker">07 / Quick troubleshooting</p><h2>Common questions.</h2></div><p class="section-copy">A few practical things we learned from testing this community remake.</p></div>
-      <div class="faq-list"><details><summary>My computer doesn't see the ESP32.</summary><p>Confirm that you are using a USB <strong>data</strong> cable, not a charge-only cable. Try a direct USB port, close software using the COM port, and retry in desktop Chrome or Edge. Some ESP32 boards require a USB-to-serial driver.</p></details><details><summary>The installer fails while writing firmware.</summary><p>Don't keep repeating failed flashes. Try the known-good cable and a stable USB port. If it fails at the same point again, check the GitHub repository for guidance before erasing anything.</p></details><details><summary>Why can't I reach the settings page?</summary><p>Switch your phone back to your normal home Wi-Fi after saving credentials. Use the IP address shown on SkyOrb; computers on a different router/subnet may not be able to reach it. <code>skyorb.local</code> relies on mDNS and may be unavailable.</p></details><details><summary>There aren't any airplanes or airports.</summary><p>First save a real radar location and try the 20- or 30-mile range. Aircraft depend on external ADS-B feeds and coverage. This edition generates an offline airport catalogue during the firmware build, so airport discovery does not depend on the earlier live Overpass lookup.</p></details><details><summary>Is the radar animation identical to the original?</summary><p>Not exactly. This is independently rebuilt firmware using different display-drawing code. Use the RADAR SWEEP settings to select Crisp, Classic, or Glow and to adjust trail intensity, rotation speed, and brightness. Minor physical display artifacts may remain even with the programmed trail set to zero.</p></details><details><summary>How does this differ from the original SkyOrb?</summary><p>The hardware wiring and two-round-display idea remain compatible with the original design, but John Christensen's Community Edition has independently rebuilt firmware, a new configurable radar and international clock, offline airport data, and alternative ADS-B sources. The original airplanes.live endpoint was not reliable for this build; this does not mean the provider has universally shut down. Original software credit goes to GulfCoastMaker, and the MakerWorld housing is by TopherPrints.</p></details><details><summary>Can I use the original enclosure or wiring?</summary><p>Yes, this remake deliberately keeps the original dual-display GPIO wiring. The printable housing is available from <a href="https://makerworld.com/en/@Topherprints_45" target="_blank" rel="noopener noreferrer">TopherPrints</a> on MakerWorld. Check the model listing for its separate print license and instructions.</p></details></div>
+      <div class="section-top"><div><p class="kicker">08 / Quick troubleshooting</p><h2>Common questions.</h2></div><p class="section-copy">A few practical things we learned from testing this community remake.</p></div>
+      <div class="faq-list"><details><summary>My computer doesn't see the ESP32.</summary><p>Confirm that you are using a USB <strong>data</strong> cable, not a charge-only cable. Try a direct USB port, close software using the COM port, and retry in desktop Chrome or Edge. Some ESP32 boards require a USB-to-serial driver.</p></details><details><summary>The installer fails while writing firmware.</summary><p>Don't keep repeating failed flashes. Try the known-good cable and a stable USB port. If it fails at the same point again, check the GitHub repository for guidance before erasing anything.</p></details><details><summary>Why can't I reach the settings page?</summary><p>Switch your phone back to your normal home Wi-Fi after saving credentials. Use the IP address shown on SkyOrb; computers on a different router/subnet may not be able to reach it. <code>skyorb.local</code> relies on mDNS and may be unavailable.</p></details><details><summary>There aren't any airplanes or airports.</summary><p>First save a real radar location and try the 20- or 30-mile range. Aircraft depend on external ADS-B feeds and coverage. This edition generates an offline airport catalogue during the firmware build, so airport discovery does not depend on the earlier live Overpass lookup.</p></details>
+      <details><summary>How do I switch between radar, spotlight, summary, and weather?</summary>
+        <p>Open SkyOrb's local IP address in a browser on the same Wi-Fi, then find <strong>RIGHT SCREEN VIEWS</strong>. Choose one view or <strong>Rotate selected views</strong>, select which screens to include, choose 10–60 seconds per view, and tap <strong>Apply right-screen mode</strong>. Changes take effect without reflashing. The clock is unaffected.</p>
+      </details>
+      <details><summary>Why is Airport Weather blank or unavailable?</summary>
+        <p>METAR is a reported observation from a specific airport. Not every nearby airport reports METARs, and observations may be delayed. Choose a location near a reporting airport, check Wi-Fi connectivity, and allow time for the next weather refresh. Radar and flight data continue to work even without a weather report.</p>
+      </details>
+<details><summary>Is the radar animation identical to the original?</summary><p>Not exactly. This is independently rebuilt firmware using different display-drawing code. Use the RADAR SWEEP settings to select Crisp, Classic, or Glow and to adjust trail intensity, rotation speed, and brightness. Minor physical display artifacts may remain even with the programmed trail set to zero.</p></details><details><summary>How does this differ from the original SkyOrb?</summary><p>The hardware wiring and two-round-display idea remain compatible with the original design, but John Christensen's Community Edition has independently rebuilt firmware, a new configurable radar and international clock, offline airport data, and alternative ADS-B sources. The original airplanes.live endpoint was not reliable for this build; this does not mean the provider has universally shut down. Original software credit goes to GulfCoastMaker, and the MakerWorld housing is by TopherPrints.</p></details><details><summary>Can I use the original enclosure or wiring?</summary><p>Yes, this remake deliberately keeps the original dual-display GPIO wiring. The printable housing is available from <a href="https://makerworld.com/en/@Topherprints_45" target="_blank" rel="noopener noreferrer">TopherPrints</a> on MakerWorld. Check the model listing for its separate print license and instructions.</p></details></div>
     </section>
     <section id="credits" class="wrap">
       <div class="credits">
@@ -139,8 +200,8 @@
           <a href="https://makerworld.com/en/@Topherprints_45" target="_blank" rel="noopener noreferrer">TopherPrints · MakerWorld profile <span>Creator profile and other printed designs</span></a>
         </div>
       </div>
-      <p class="ecosystem"><strong>Open-source tools and data:</strong> aircraft data via <a href="https://adsb.lol/" target="_blank" rel="noopener noreferrer">ADSB.lol</a> and <a href="https://adsb.fi/" target="_blank" rel="noopener noreferrer">ADSB.fi</a>; airport coordinates from the public-domain <a href="https://ourairports.com/data/" target="_blank" rel="noopener noreferrer">OurAirports</a> database; geocoding by <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>; time-zone data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>; browser flashing by <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener noreferrer">ESP Web Tools</a>. Radar rendering research was informed by <a href="https://github.com/arvis91/deskradar" target="_blank" rel="noopener noreferrer">DeskRadar</a> and <a href="https://github.com/MatixYo/ESP32-Plane-Radar" target="_blank" rel="noopener noreferrer">ESP32-Plane-Radar</a>. Respect the individual licenses and data provider terms.</p>
-      <p class="tiny">SkyOrb Community Edition v3.5 · Released as an independent hobby project. The MIT software license does not grant additional rights to third-party 3D models or data services. Aircraft data is not suitable for navigation, emergency response, or aviation safety decisions.</p>
+      <p class="ecosystem"><strong>Open-source tools and data:</strong> aircraft data via <a href="https://adsb.lol/" target="_blank" rel="noopener noreferrer">ADSB.lol</a> and <a href="https://adsb.fi/" target="_blank" rel="noopener noreferrer">ADSB.fi</a>; airport coordinates from the public-domain <a href="https://ourairports.com/data/" target="_blank" rel="noopener noreferrer">OurAirports</a> database; geocoding by <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>; time-zone data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>; airport METAR observations by the <a href="https://aviationweather.gov/data/api/" target="_blank" rel="noopener noreferrer">NOAA Aviation Weather Center</a>; browser flashing by <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener noreferrer">ESP Web Tools</a>. Radar rendering research was informed by <a href="https://github.com/arvis91/deskradar" target="_blank" rel="noopener noreferrer">DeskRadar</a> and <a href="https://github.com/MatixYo/ESP32-Plane-Radar" target="_blank" rel="noopener noreferrer">ESP32-Plane-Radar</a>. Respect the individual licenses and data provider terms.</p>
+      <p class="tiny">SkyOrb Community Edition v4.0 · Stable, hardware-tested community release. The MIT software license does not grant additional rights to third-party 3D models or data services. Aircraft data is not suitable for navigation, emergency response, or aviation safety decisions.</p>
     </section>
   </main>
   <footer><div class="wrap"><span>SKYORB COMMUNITY EDITION · JOHN CHRISTENSEN / @TIKISHARK777</span><span>Original concept © GulfCoastMaker · <a href="https://github.com/Tikishark777/SkyOrb-Replacement/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View license</a> · <a href="#top">Back to top ↑</a></span></div></footer>
