@@ -908,6 +908,9 @@ void renderClock(const Config &c){
   const int layout=(c.clockSeconds?1:0)|(c.clockLeadingZero?2:0)|
       ((c.clockDateStyle&3)<<2)|((c.clockTzMode&3)<<4)|(c.clock24?64:0);
   const bool first=(lastDisplay!=&t);
+  static uint16_t lastClockRingColor=0;
+  const uint16_t currentRingColor=accent565(c.accent);
+  bool redrawClockRing=first || layout!=lastLayout || currentRingColor!=lastClockRingColor;
   if(first){t.fillScreen(0x0000);lastDisplay=&t;}
   if(first||layout!=lastLayout){
     t.fillRect(6,71,228,143,0x0000);
@@ -917,6 +920,11 @@ void renderClock(const Config &c){
   time_t utc=time(nullptr);
   if(utc<1700000000){
     if(first)center(t,"SYNCING TIME",105,2,0xFFFF);
+    if(redrawClockRing){
+      t.drawCircle(120,120,115,currentRingColor);
+      t.drawCircle(120,120,110,0x29c5);
+      lastClockRingColor=currentRingColor;
+    }
     return;
   }
   const time_t localEpoch=utc+c.utcOffset;
@@ -932,6 +940,7 @@ void renderClock(const Config &c){
   const int smallWidth=c.clockSeconds?36:0; // ":SS" in text size 2
   const int x=max(10,(240-mainWidth-smallWidth-(c.clockSeconds?5:0))/2);
   if(lastMain!=mainTime){
+    redrawClockRing=true;
     t.fillRect(15,79,210,44,0x0000);
     t.setTextColor(0xFFFF);t.setTextSize(4);t.setCursor(x,85);t.print(mainTime);
     lastMain=mainTime;
@@ -952,6 +961,7 @@ void renderClock(const Config &c){
   if(!c.clock24)subtitle=pm?"PM":"AM";
   if(zone.length()){if(subtitle.length())subtitle+="  ";subtitle+=zone;}
   if(subtitle!=lastSubtitle){
+    redrawClockRing=true;
     t.fillRect(13,123,214,20,0x0000);
     if(subtitle.length())center(t,subtitle,124,subtitle.length()>17?1:2,0xFFFF);
     lastSubtitle=subtitle;
@@ -966,11 +976,19 @@ void renderClock(const Config &c){
   }
   String date=String(weekdays[dateTime.tm_wday])+"/"+String(buf);
   if(date!=lastDate){
+    redrawClockRing=true;
     t.fillRect(10,146,220,57,0x0000);
     center(t,weekdays[dateTime.tm_wday],148,2,0xFDC7);
     const uint8_t fontSize=strlen(buf)>16?1:2;
     center(t,buf,174,fontSize,0xFDC7);
     lastDate=date;
+  }
+  // Restore the original two fine clock circles after text-clearing operations.
+  // Second ticks do not redraw the border; changing the accent does.
+  if(redrawClockRing){
+    t.drawCircle(120,120,115,currentRingColor);
+    t.drawCircle(120,120,110,0x29c5);
+    lastClockRingColor=currentRingColor;
   }
 }
 
