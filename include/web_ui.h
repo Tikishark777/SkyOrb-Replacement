@@ -81,6 +81,23 @@ button.pick{border:1px solid #555;background:#080808;color:#aaa;min-height:47px;
 <button class="selectColor" type="button" data-c="#2b9bfa" aria-label="Blue" style="background:#2b9bfa"></button>
 <button class="selectColor" type="button" data-c="#ff3e43" aria-label="Red" style="background:#ff3e43"></button></div>
 <p class="note">Changes the accent color of this control page. The physical radar remains green, just like the original SkyOrb.</p></section>
+<section class="card" id="aviationViewsCard"><h2>RIGHT SCREEN VIEWS</h2>
+<p class="note">Keep your original live radar, or show an aircraft spotlight, nearby traffic summary, or airport METAR weather. The left clock and aircraft tracking continue in every mode.</p>
+<label for="aviationView">DISPLAY MODE</label>
+<select id="aviationView"><option value="0">Radar only (default)</option><option value="1">Aircraft Spotlight (nearest flight)</option><option value="2">Traffic Summary</option><option value="3">Airport Weather (METAR)</option><option value="4">Rotate selected views</option></select>
+<div id="aviationRotationBox" style="margin:14px 0 18px" hidden>
+<div class="label">INCLUDE IN ROTATION</div>
+<label class="radioLine"><input type="checkbox" id="viewRadar" checked> Live radar</label>
+<label class="radioLine"><input type="checkbox" id="viewSpotlight" checked> Aircraft Spotlight</label>
+<label class="radioLine"><input type="checkbox" id="viewSummary" checked> Traffic Summary</label>
+<label class="radioLine"><input type="checkbox" id="viewWeather" checked> Airport Weather</label>
+<label for="aviationSeconds">SECONDS PER VIEW</label><select id="aviationSeconds"><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="20" selected>20 seconds</option><option value="30">30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option></select>
+</div>
+<button id="aviationApply" class="action" type="button">Apply right-screen mode</button>
+<div class="info" id="aviationStatus">Radar-only is the default. Modes apply without rebooting and can be changed back any time.</div>
+<div class="statusLine" id="aviationMetar">METAR: Waiting for connection...</div>
+<p class="note">Airport Weather uses occasional reports from nearby METAR-reporting airports (when available). Observations may be delayed or unavailable. For information only, never for flight operations.</p>
+</section>
 <section class="card" id="sweepCard"><h2>RADAR SWEEP</h2>
 <p class="note">Adjust the physical radar animation to your liking. Zero trail draws a single crisp sweep line; higher values make a longer green glow. Your aircraft, airports and location will not change.</p>
 <div class="label">QUICK PRESETS</div>
@@ -107,6 +124,7 @@ const $=id=>document.getElementById(id),C=$('scope'),g=C.getContext('2d');
 let flights=[],airports=[],rad=20,lat=0,lon=0,locSet=false,connected=false,palette='#ff9200';
 let last=0,lastStatus='';
 let sweepPrefs={trail:50,seconds:11,brightness:100};
+let skyViewPrefs={view:0,mask:15,seconds:20};
 function updateSweepControls(trail,seconds,brightness){
   trail=Number(trail);seconds=Number(seconds);brightness=Number(brightness);
   if(!Number.isFinite(trail))trail=50;if(!Number.isFinite(seconds))seconds=11;
@@ -139,6 +157,29 @@ $('sweepApply').onclick=async()=>{
 
 const safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function msg(id,s,err=false){let e=$(id);e.textContent=s;e.classList.toggle('error',!!err);e.classList.toggle('ok',!err);}
+
+function skyViewMask(){
+  return ($('viewRadar').checked?1:0)|($('viewSpotlight').checked?2:0)|($('viewSummary').checked?4:0)|($('viewWeather').checked?8:0);
+}
+function populateSkyViewControls(view,mask,seconds){
+  $('aviationView').value=String(view);
+  $('aviationSeconds').value=String(seconds);
+  for(const [id,bit] of [['viewRadar',1],['viewSpotlight',2],['viewSummary',4],['viewWeather',8]])$(id).checked=!!(mask&bit);
+  $('aviationRotationBox').hidden=Number(view)!==4;
+}
+$('aviationView').addEventListener('change',()=>{$('aviationRotationBox').hidden=$('aviationView').value!=='4'});
+$('aviationApply').addEventListener('click',async()=>{
+  const btn=$('aviationApply');btn.disabled=true;
+  const view=Number($('aviationView').value),mask=skyViewMask();
+  if(!mask){msg('aviationStatus','Select at least one view for rotation.',true);btn.disabled=false;return;}
+  msg('aviationStatus','Saving right-screen views...');
+  try{
+    const d=await api('/radar/view',{method:'POST',body:new URLSearchParams({view:String(view),mask:String(mask),seconds:$('aviationSeconds').value})});
+    msg('aviationStatus',d.message||'Updated.');
+  }catch(e){msg('aviationStatus','Could not save view: '+e.message,true)}
+  finally{btn.disabled=false}
+});
+
 async function api(url,options){let r=await fetch(url,options),txt=await r.text();let x;try{x=JSON.parse(txt)}catch(e){throw Error('Unexpected reply (HTTP '+r.status+')')}if(!r.ok||x.error)throw Error(x.error||('HTTP '+r.status));return x;}
 function setRange(n){rad=Number(n);$('radius').value=n;for(let b of $('ranges').querySelectorAll('button'))b.classList.toggle('active',Number(b.dataset.r)===rad);}
 function setClock(v){$('clock24').value=v?'1':'0';$('format24').classList.toggle('active',v);$('format12').classList.toggle('active',!v);}
@@ -148,7 +189,8 @@ async function config(){try{let d=await api('/api/config');$('lat').value=d.loca
 locSet=!!d.locationSet;lat=d.lat;lon=d.lon;setRange(d.radius||20);setClock(!!d.clock24);$('swapper').checked=!!d.swap;
 $('fallback').value=d.fallback??0;setPalette(d.accent||'#ff9200');
  $('clockTzMode').value=d.clockTzMode??1;$('clockDateStyle').value=d.clockDateStyle??0;
- $('clockSeconds').checked=!!d.clockSeconds;$('clockLeadingZero').checked=!!d.clockLeadingZero;updateSweepControls(d.sweepTrail??50,d.sweepSeconds??11,d.sweepBrightness??100);airports=d.airports||[];drawAirports();
+ $('clockSeconds').checked=!!d.clockSeconds;$('clockLeadingZero').checked=!!d.clockLeadingZero;updateSweepControls(d.sweepTrail??50,d.sweepSeconds??11,d.sweepBrightness??100);
+  populateSkyViewControls(d.rightView??0,d.rightMask??15,d.rightViewSeconds??20);airports=d.airports||[];drawAirports();
 msg('saveStatus',locSet?'Location saved: '+lat.toFixed(4)+', '+lon.toFixed(4):'No location saved yet. Search an address or enter coordinates, then Apply.');
 }catch(e){msg('saveStatus','Could not load settings: '+e.message,true)}}
 function drawAirports(){let e=$('airports');e.replaceChildren();if(!airports.length){e.textContent='No airports saved.';return;}for(let i=0;i<airports.length;i++){
@@ -204,7 +246,8 @@ for(let b of $('colors').querySelectorAll('button'))b.onclick=async()=>{setPalet
 catch(e){msg('networkStatus','Theme could not be saved: '+e.message,true)}};
 function frLink(a){let c=(a.flight||'').trim(),r=(a.reg||'').trim();if(/^[A-Z0-9-]+$/i.test(c)&&c.length)return 'https://www.flightradar24.com/data/flights/'+encodeURIComponent(c.toLowerCase());
 if(/^[A-Z0-9-]+$/i.test(r)&&r.length)return 'https://www.flightradar24.com/data/aircraft/'+encodeURIComponent(r.toLowerCase());return 'https://www.flightradar24.com/';}
-async function refresh(){try{let d=await api('/api/live');last=Date.now();connected=d.wifi==='connected';flights=d.flights||[];airports=d.airports||[];
+async function refresh(){try{let d=await api('/api/live');last=Date.now();
+const metarLine=$('aviationMetar');if(metarLine)metarLine.textContent='METAR: '+(d.metarStation||'No station')+' — '+(d.metarStatus||'Not requested');connected=d.wifi==='connected';flights=d.flights||[];airports=d.airports||[];
 locSet=!!d.locationSet;lat=d.lat;lon=d.lon;rad=d.radius||20;let net=connected?'CONNECTED • '+d.homeIp:'DISCONNECTED';
 msg('networkStatus','Home Wi-Fi: '+net+'\nLocal address: http://'+(d.homeIp||'192.168.4.1')+'\nRecovery setup hotspot: '+(d.setupActive?'active (192.168.4.1)':'off')+'\nTimezone: '+d.timezone);
 msg('feedStatus',(d.source&&d.source!=='none'?'Source: '+d.source+' • ':'')+(d.status||'Waiting for aircraft feed')+' • HTTP '+d.httpCode);
