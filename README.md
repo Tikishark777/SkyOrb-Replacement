@@ -1,161 +1,160 @@
-# SkyOrb Community Edition
+# SkyOrb Community Edition — ESP32 Flight Radar & International Clock
 
-**ESP32 Flight Radar + International Clock**
+**Stable release: v4.0.0 · Hardware-tested · Open source**
 
-SkyOrb Community Edition is an independent, ground-up firmware implementation for a dual-display ESP32 desk radar and clock. It retains the original SkyOrb display concept and compatible GPIO wiring, restores aircraft tracking through alternative ADS-B feeds, and adds customizable radar and international-clock settings.
+**SkyOrb Community Edition** is an independently rebuilt ESP32 aviation desk instrument created and maintained by **John Christensen** ([@Tikishark777](https://github.com/Tikishark777)). It preserves the two-round-display layout and **original wiring** of [GulfCoastMaker's SkyOrb](https://github.com/GulfCoastMaker/SkyOrb), while introducing a replacement aircraft feed, an offline airport catalog, an international clock, configurable radar animation, and **four selectable aviation information views**.
 
-**[Install SkyOrb Community Edition and view the illustrated build guide](https://tikishark777.github.io/SkyOrb-Replacement/)**
+**[Install SkyOrb Community Edition — free browser installer and illustrated build guide](https://tikishark777.github.io/SkyOrb-Replacement/)**
 
-**Project status — v3.5 Community Edition:** Tested on a physical dual-screen ESP32 unit. Wi-Fi onboarding, address search, live aircraft, radar range, offline airport lookup, sweep settings, reset, and clock display have been confirmed working on that unit. International-clock settings are included in the current firmware. Behavior may vary with hardware and networks, and minor display-motion artifacts are possible.
+[Source code](https://github.com/Tikishark777/SkyOrb-Replacement) · [Original SkyOrb](https://gulfcoastmaker.github.io/SkyOrb/) · [Printable enclosure by TopherPrints](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442)
 
-> **Note:** SkyOrb is a hobby display, not aviation safety equipment. See [Safety and limitations](#safety-and-limitations).
+> **Release status:** SkyOrb Community Edition's radar, Wi-Fi setup, aircraft views, screen rotation and international clock have been installed and tested on real dual-GC9A01 ESP32 hardware. Hardware and network environments can vary. This is a hobby information display, **not an aviation navigation or safety instrument**.
 
-## Quick start
+## Highlights
 
-1. Gather the [required parts](#hardware) and [wire both displays](#wiring).
-2. Connect your ESP32 to a desktop or laptop with a **USB data cable**, then use the [browser installer](https://tikishark777.github.io/SkyOrb-Replacement/) in Chrome or Edge.
-3. [Connect to Wi-Fi and configure the device](#connect-to-wi-fi) from your phone.
+- **Live aircraft:** Nearby ADS-B-equipped aircraft from [ADSB.lol](https://adsb.lol/), falling back to [ADSB.fi](https://adsb.fi/) when needed. Aircraft coverage, latency and availability vary.
+- **Four right-hand screen views:** Radar, Aircraft Spotlight, Traffic Summary and Airport Weather; choose one or rotate a custom selection.
+- **Customizable rotation:** Include any combination of the four views and choose **10, 15, 20, 30, 45 or 60 seconds** per view. **Radar only is the default.**
+- **Airport METAR weather:** Latest available observation at a nearby reporting airport, including temperature, wind, visibility, cloud cover and flight category where supplied. Weather updates periodically, when the feature is in use; it is **not a forecast**.
+- **Radar range:** 5, 10, 20 or 30 miles around a searched address or coordinates.
+- **Radar sweep:** Crisp, Classic and Glow presets, or custom trail (0–100%), rotation speed (5–20 seconds per revolution) and brightness (20–100%).
+- **Offline airport discovery:** Search the build-generated [OurAirports](https://ourairports.com/data/) catalog or add airports by ICAO/IATA code or coordinates.
+- **International clock:** Automatic location-based time zone, 12/24-hour format, leading zero, optional seconds, flexible labels and four date formats.
+- **Easy setup:** Wi-Fi scan/selection, phone dashboard, portal color themes, Wi-Fi reset and password-protected local firmware-update support.
+- **Browser installation:** Flash prebuilt firmware from desktop Chrome or Edge without Arduino IDE or PlatformIO.
 
-The linked installer page also provides an illustrated build guide.
+### Right-hand screen choices
 
-## Features
+| Mode | What appears on the round display |
+| --- | --- |
+| **Live Radar** | Animated green sweep, aircraft targets and airport markers, adjustable radius |
+| **Aircraft Spotlight** | Nearest reported flight; its identifier, altitude, ground speed, heading and distance |
+| **Traffic Summary** | Aircraft count, closest reported flight, highest altitude and fastest aircraft |
+| **Airport Weather (METAR)** | Available recent station weather: temperature, wind, visibility, clouds and flight category |
+| **Rotate selected views** | Cycles through any checked combination of Radar, Spotlight, Summary and Weather |
 
-**Flight radar**
-- Live nearby aircraft from [ADSB.lol](https://adsb.lol/), with [ADSB.fi](https://adsb.fi/) as a fallback, subject to provider availability.
-- Green radar on the right-hand round display; selectable range of **5, 10, 20, or 30 miles**.
-- **Crisp**, **Classic**, and **Glow** sweep presets, plus adjustable trail strength, speed (**5–20 seconds per revolution**), and brightness (**20–100%**).
-- Offline nearby-airport catalogue generated at build time from [OurAirports](https://ourairports.com/data/), plus manual airport markers.
-- Address search or direct latitude/longitude entry.
+No aircraft in range? Spotlight and Summary indicate that instead of inventing data. No recent METAR? The weather view reports it as unavailable rather than showing a made-up reading. The **left clock remains active** in every right-hand mode.
 
-**International clock**
-- White/amber time-and-date clock on the left-hand round display.
-- Location-based time zone, with a regional abbreviation where recognized, an accurate UTC offset, or no zone label.
-- **12/24-hour time**, optional leading zero, and independently refreshed optional seconds (off by default).
-- Full written date, **MM/DD/YYYY**, **DD/MM/YYYY**, or **YYYY-MM-DD**.
+## Parts list
 
-**Setup and customization**
-- Phone-friendly Wi-Fi onboarding, a local dashboard, and selectable portal color themes.
-- Radar and clock settings that apply without reinstalling firmware; radar sweep preferences persist across restarts.
-- Wi-Fi reset and local OTA firmware upload when configured.
-- No-code firmware installation with [ESP Web Tools](https://esphome.github.io/esp-web-tools/).
-- An option to swap the screen roles in device settings without rewiring.
-
-## Hardware
-
-| Part | Quantity | Notes |
+| Part | Qty | Notes |
 | --- | :---: | --- |
-| ESP-WROOM-32 development board | 1 | Original 30-pin ESP32 board |
-| GC9A01 TFT display, 1.28-inch, 240 × 240, SPI, 7-pin | 2 | One radar and one clock |
-| 30-pin ESP32 GPIO screw-terminal breakout | Optional | Simplifies wiring without soldering |
-| Hookup wires | As needed | Connect both displays to the ESP32 |
-| USB **data** cable | 1 | Required for browser flashing; USB power for normal use |
-| Printed enclosure | Optional | [SkyOrb enclosure by TopherPrints](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442); see its separate license |
+| **ESP-WROOM-32**, 30-pin development board | 1 | Original-style ESP32 hardware |
+| **GC9A01** round SPI TFT, 1.28 in, 240 × 240, seven pins | 2 | Left clock; right aviation display |
+| 30-pin ESP32 screw-terminal breakout | Optional | Makes wiring easier |
+| Hookup wires | As needed | For both screens |
+| USB **data** cable | 1 | Required for USB flashing, not just charging |
+| Printed case | Optional | [TopherPrints' SkyOrb enclosure on MakerWorld](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442) |
 
-## Wiring
+### Wiring — original SkyOrb pinout, unchanged
 
-This firmware uses the **original SkyOrb pinout, unchanged**. Both displays share **SCL/CLK → GPIO 18** and **SDA/MOSI → GPIO 23**, while the reset, data/command, and chip-select pins are separate.
+Both displays share **SCL/CLK → GPIO 18** and **SDA/MOSI → GPIO 23**. The remaining control lines are separate.
 
-| GC9A01 display pin | Radar display (right) | Clock display (left) |
+| GC9A01 pin | **Left: clock** | **Right: aviation views** |
 | --- | --- | --- |
 | GND | GND | GND |
-| VCC | **3.3V** | **3.3V** |
+| VCC | **3.3 V** | **3.3 V** |
 | SCL / CLK | GPIO 18 | GPIO 18 |
 | SDA / MOSI | GPIO 23 | GPIO 23 |
-| RES / RST | GPIO 4 | GPIO 21 |
-| DC | GPIO 2 | GPIO 17 (TX2) |
-| CS | GPIO 5 | GPIO 16 (RX2) |
+| RES / RST | GPIO 21 | GPIO 4 |
+| DC | GPIO 17 | GPIO 2 |
+| CS | GPIO 16 | GPIO 5 |
 
-**Important:** Supply **3.3V, not 5V**, to these displays. Verify the pin labels on your modules before connecting power. These instructions are for the original SkyOrb-style **7-pin GC9A01** displays.
+**Important:** These are the original-style seven-pin GC9A01 modules. Use their specified **3.3 V** supply, verify your module's labels and electrical requirements, and do not change the pins simply to install this software. The phone dashboard also has an optional screen-swap setting for clock/radar roles.
 
-## Install and configure
+## Installation — no coding required
 
-### Flash the firmware
+1. Assemble the hardware using the wiring chart above.
+2. Open **[the SkyOrb installer](https://tikishark777.github.io/SkyOrb-Replacement/)** on a desktop or laptop using **Chrome or Edge**.
+3. Connect your ESP32 using a known-good USB **data** cable, ideally directly to the computer.
+4. Select **Install SkyOrb Community Edition**, choose the ESP32 COM/serial port and follow the on-screen instructions.
+5. Wait for the browser to report success before disconnecting the device. **Flashing replaces existing firmware** and may clear stored Wi-Fi or location settings.
 
-1. Assemble the hardware using the wiring table above.
-2. Open the **[SkyOrb Community Edition installer](https://tikishark777.github.io/SkyOrb-Replacement/)** in **Chrome or Edge on a desktop or laptop**.
-3. Connect the ESP32 with a reliable USB **data** cable. A charging-only cable will not work.
-4. Select **Install SkyOrb Community Edition**, choose the ESP32's serial/COM port, and follow the browser prompts.
-5. Keep the board connected until flashing completes.
+The installer uses ESP Web Tools; its compiled binaries are generated and published by this repository's GitHub Actions workflow.
 
-**Warning:** Flashing overwrites existing firmware and may erase saved Wi-Fi and location settings.
+## First-time Wi-Fi setup and phone dashboard
 
-### Connect to Wi-Fi
+1. Connect your phone to Wi-Fi **`SKYORB-Setup`** using password **`SKYORB1234`**.
+2. If the captive portal does not open automatically, browse to **`http://192.168.4.1/setup`**. Scan/select your **2.4 GHz** home network and save its password.
+3. **Reconnect the phone to your normal home Wi-Fi** afterward.
+4. Find the SkyOrb device's numeric IP address on its display (shown briefly after startup, or while configuring), or look it up in your router's connected devices. Open `http://<device-IP>/` in the phone browser. `http://skyorb.local/` may work on some networks but is less reliable.
+5. Under **SEARCH CENTER**, search a city, address, airport area or other place; or type coordinates. Select a **5 / 10 / 20 / 30-mile** radius and press **Apply location**.
+6. In **AIRPORTS**, find nearby commercial airports from the offline catalog, search by **ICAO/IATA code**, or add a marker by coordinates.
+7. Use the **RIGHT SCREEN VIEWS**, **RADAR SWEEP** and **CLOCK DISPLAY** sections described below to customize the physical displays. Changes are stored in the ESP32 and don't require another firmware installation.
 
-1. On your phone, join the ESP32 setup hotspot: **`SKYORB-Setup`**. The default password is **`SKYORB1234`**.
-2. If the captive portal does not appear, open **`http://192.168.4.1/setup`**.
-3. Choose your **2.4 GHz** home Wi-Fi network and enter its password.
-4. **Reconnect your phone to your normal home Wi-Fi.**
-5. Open the **numeric IP address shown on the SkyOrb display** in your phone browser. You can also try `http://skyorb.local/`, although mDNS may not work on every network.
+**Network note:** Your phone and SkyOrb must be able to reach each other on the same local network. A guest network or separate router/subnet can block the dashboard even while both devices have Internet access.
 
-Your phone or computer must be able to reach the ESP32 on the same local network.
+### RIGHT SCREEN VIEWS — choose or rotate
 
-### Customize radar and clock
+1. Open the local dashboard and scroll to **RIGHT SCREEN VIEWS**.
+2. Set **Display mode** to **Radar only**, **Aircraft Spotlight**, **Traffic Summary**, **Airport Weather (METAR)**, or **Rotate selected views**.
+3. If rotating, check the views to include and choose **seconds per view** (10–60 seconds).
+4. Press **Apply right-screen mode**. The selected display changes without rebooting. To restore the original behavior, select **Radar only**.
 
-From the device dashboard:
+**METAR details:** Airport Weather uses recent reports from nearby METAR-reporting airports, via the [Aviation Weather Center](https://aviationweather.gov/data/api/). The firmware checks for updates at a conservative interval of roughly 15 minutes while the feature is enabled. Not every airport issues METARs, and not every report includes every field. A report describes the station and its observation time, not conditions at every point inside the radar range.
 
-- **Location and airports:** Search for your address or enter coordinates; select a radar radius and configure nearby airports.
-- **Radar sweep:** In **RADAR SWEEP**, choose **Crisp**, **Classic**, or **Glow**, or adjust trail, rotation speed, and brightness. Select **Apply** to update the physical radar display immediately.
-- **Clock:** In **CLOCK DISPLAY**, choose your zone label, date format, 12/24-hour mode, leading zero, and optional seconds. Select **Apply clock settings**.
-- **Appearance:** Choose a portal color theme and adjust other available device settings.
+### RADAR SWEEP — Crisp / Classic / Glow
 
-These changes do not require a fresh firmware installation.
+Choose a preset or adjust the three sliders: trail/ghosting from **0–100%**, sweep rotation from **5–20 seconds per turn**, and sweep brightness from **20–100%**. Press **Apply radar sweep**. Settings take effect without resetting the radar center, airport markers or Wi-Fi. **Crisp** removes intentionally programmed trailing rays; some LCD motion/refresh artifacts can still remain.
 
-## Troubleshooting
+### CLOCK DISPLAY — international choices
 
-| Problem | What to try |
+- **Time format:** 12-hour (AM/PM) or 24-hour, with optional leading zero.
+- **Seconds:** Optional smaller seconds digits; off by default.
+- **Time-zone label:** Recognized regional abbreviation (for example PDT/PST, CET/CEST, JST) where reliably available; or an exact UTC offset; or no label.
+- **Date:** Full written date, **MM/DD/YYYY**, **DD/MM/YYYY**, or **YYYY-MM-DD**.
+
+The clock follows the selected radar location. Daylight-saving adjustments are obtained from the time-zone data service. Press **Apply clock settings** to save.
+
+## Understanding the data and its limits
+
+- **Aircraft:** ADS-B coverage is incomplete and some aircraft do not broadcast their positions. The app deliberately ignores stale aircraft positions and depends on external feed availability. Altitude/speed/heading are reported values and may be missing or delayed.
+- **Spotlight and summary:** These are computed from the same reported aircraft already in the radar; no separate receiver is required. They do **not** represent all aircraft in the sky.
+- **Airport METAR:** This is an **observation**, not a weather prediction. It can be old, missing, or unavailable, and the reporting airport may not be at the radar center. Consult the Aviation Weather Center or official aviation products for operational decisions.
+- **Airports:** Discovery is based on an onboard catalog generated from public-domain OurAirports data; the list can omit small fields or change between builds. Manual locations are configurable.
+- **Connectivity:** Aircraft and METAR reports require Internet access. The time display needs time synchronization. The portal is intended only for a **trusted local network**.
+- **HTTPS:** The current ESP32 firmware makes some read-only public HTTPS requests without certificate validation. Do not treat retrieved data as authenticated, safety-critical information.
+
+**Safety:** This is an informational hobby display. Do **not** use it for navigation, flight operations, collision avoidance, emergency response, or any other safety-critical aviation decision.
+
+## Source layout and maintenance
+
+| Location | Purpose |
 | --- | --- |
-| Browser cannot flash the ESP32 | Use desktop Chrome or Edge, a known-good **USB data cable**, and a direct USB port. Select the correct serial/COM port. |
-| USB write fails repeatedly | If it fails again at the same point, stop and investigate rather than repeatedly erasing the board. The [original SkyOrb installer](https://gulfcoastmaker.github.io/SkyOrb/) remains a recovery reference. |
-| Phone cannot reach the dashboard | Reconnect the phone to your home Wi-Fi and use the device's **numeric IP address**. Check that both devices are on a LAN where they can communicate. |
-| `skyorb.local` does not open | Use the numeric IP address; mDNS may be unavailable or blocked. |
-| Radar sweep shows a faint trail | **Crisp** disables the programmed fading trail, but some physical-display refresh artifacts may remain. |
-| Aircraft are missing or delayed | Check connectivity and allow for interruptions or incomplete data from the ADS-B providers. |
+| `src/main.cpp` | ESP32 firmware, aviation views, radar graphics, clock, connectivity, aircraft and METAR requests |
+| `include/web_ui.h` | Local phone setup/settings interface |
+| `platformio.ini` | ESP32 PlatformIO board and library configuration |
+| `scripts/generate_airports.py` | Builds the offline OurAirports airport catalog |
+| `scripts/prepare_installer.py` | Stages browser installer firmware binaries |
+| `.github/workflows/build.yml` | Compiles firmware and publishes GitHub Pages |
+| `web-installer/index.html` | Public installation website and build guide |
+| `web-installer/manifest.json` | Installer version label and flashing offsets |
+| `LICENSE` | MIT software license |
 
-**Network example:** A computer on `10.0.0.x` and a SkyOrb on `192.168.86.x` may be separated by router configuration.
+The GitHub Pages site, README and manifest version are **documentation/metadata**, not ESP32 firmware code. Updating them will trigger GitHub Actions, but **you do not need to flash a working ESP32 again for documentation-only changes**. Do not modify source files, airport generator or wiring solely to update the website. Keep a backup of the last known-good firmware and confirm Actions turns green for each new release.
 
-## Source code and automated builds
+### Release notes — v4.0.0 stable
 
-The repository contains the firmware, local dashboard UI, and browser installer. GitHub Actions builds the ESP32 firmware, generates the offline airport catalogue from OurAirports data, packages the required binary files, and publishes the installer through GitHub Pages.
+- Added **Aircraft Spotlight** for the nearest reported flight.
+- Added **Traffic Summary** with nearby aircraft statistics.
+- Added optional **Airport Weather (METAR)** from nearby reporting stations.
+- Added **Right Screen Views** selector and custom **10–60 second rotation** of any selected views.
+- Preserved the original animated radar as the default; no display, GPIO, clock or Wi-Fi wiring changes.
+- Retained v3.5 international clock, v3.4 sweep controls, offline airport discovery and phone dashboard.
+- Tested the new aviation screens on the physical dual-display ESP32 build.
 
-| File | Purpose |
-| --- | --- |
-| [`src/main.cpp`](src/main.cpp) | ESP32 firmware, networking, aircraft data, and screen rendering |
-| [`include/web_ui.h`](include/web_ui.h) | Phone setup portal and local dashboard |
-| [`scripts/generate_airports.py`](scripts/generate_airports.py) | Build-time airport catalogue generator |
-| [`scripts/prepare_installer.py`](scripts/prepare_installer.py) | Copies compiled binaries to `web-installer/` |
-| [`.github/workflows/build.yml`](.github/workflows/build.yml) | Build, package, and deploy workflow |
-| [`web-installer/index.html`](web-installer/index.html) | Public browser installer and illustrated build guide |
-| [`web-installer/manifest.json`](web-installer/manifest.json) | ESP Web Tools binary locations |
+## Origins and credits
 
+**Original SkyOrb concept, original firmware and dual-display GPIO arrangement:** [GulfCoastMaker](https://github.com/GulfCoastMaker/SkyOrb), whose [original SkyOrb installation page](https://gulfcoastmaker.github.io/SkyOrb/) remains available as a reference. The original code is MIT-licensed; preserve applicable attribution for any reused code.
 
-## Issues, contributions, and maintenance
+**Printed SkyOrb enclosure/model on MakerWorld:** [TopherPrints (@Topherprints_45)](https://makerworld.com/en/@Topherprints_45), publisher of [Aviation Desk Clock — Project SkyOrb](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442). The printed design has its **own license**, separate from this software's MIT license.
 
-For firmware problems, [open a GitHub issue](https://github.com/Tikishark777/SkyOrb-Replacement/issues) and include the ESP32 model, display type, browser, relevant Actions run, and any serial-console logs. **Remove private details** before posting logs.
+**SkyOrb Community Edition — independent replacement firmware, integration, hardware testing and maintenance:** **John Christensen** ([@Tikishark777](https://github.com/Tikishark777)). The project was rebuilt after the original **airplanes.live** connection proved unreliable for this hardware/software combination. This does not mean that airplanes.live has shut down globally. The Community Edition is unofficial and is not endorsed by GulfCoastMaker or TopherPrints.
 
-## Origins and acknowledgements
+**Data and services:** [ADSB.lol](https://adsb.lol/), [ADSB.fi](https://adsb.fi/), [OurAirports](https://ourairports.com/data/), [Aviation Weather Center](https://aviationweather.gov/data/api/) (METARs), [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) and Nominatim (address search), [Open-Meteo](https://open-meteo.com/) (time-zone information), [ESP Web Tools](https://esphome.github.io/esp-web-tools/) (USB installer), and [GitHub](https://github.com/) (repository, builds and Pages hosting). Radar-rendering research also referenced [DeskRadar](https://github.com/arvis91/deskradar) and [ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar). Honor each provider's terms and software licenses.
 
-SkyOrb Community Edition is an **unofficial, independent ground-up firmware rebuild**, not a modified copy of the original compiled firmware. It was developed after the original `airplanes.live` feed proved unreliable for this project, including HTTP 403 responses.
+The firmware is distributed under this repository's [MIT License](LICENSE). The software license does not cover third-party 3D models, APIs or datasets.
 
-- **Original SkyOrb concept, firmware, and dual-display wiring:** [GulfCoastMaker](https://github.com/GulfCoastMaker/SkyOrb). The [original installation page](https://gulfcoastmaker.github.io/SkyOrb/) and repository remain available. The original repository is MIT-licensed; retain any applicable original notices if copying source code.
-- **Printable SkyOrb enclosure:** [TopherPrints (@Topherprints_45)](https://makerworld.com/en/@Topherprints_45), creator of the [Aviation Desk Clock — Project SkyOrb model](https://makerworld.com/en/models/2959706-aviation-desk-clock-project-skyorb#profileId-3317442). The model's MakerWorld license is separate from the software license; review its terms before modifying or redistributing it.
-- **SkyOrb Community Edition replacement firmware and maintenance:** John Christensen ([@Tikishark777](https://github.com/Tikishark777)), including firmware development, customizations, hardware testing, browser installation site, and documentation.
+---
 
-Additional services, tools, and references:
-
-- [ADSB.lol](https://adsb.lol/) and [ADSB.fi](https://adsb.fi/) — aircraft reports.
-- [OurAirports](https://ourairports.com/data/) — public-domain airport data.
-- [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) / Nominatim — address lookup.
-- [Open-Meteo](https://open-meteo.com/) — time-zone offset information.
-- [ESP Web Tools](https://esphome.github.io/esp-web-tools/) — browser-based firmware flashing.
-- [DeskRadar](https://github.com/arvis91/deskradar) and [ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar) — screen-rendering research references; no claim is made that their code or designs were reused.
-- GitHub, GitHub Actions, and GitHub Pages — source hosting, automated builds, and installer hosting.
-
-This Community Edition is **not endorsed by GulfCoastMaker or TopherPrints**.
-
-## License
-
-The software in this repository is provided under the [MIT License](LICENSE). Upstream libraries, aircraft-data services, and the printable enclosure have their **own separate terms**, which must also be respected.
-
-## Safety and limitations
-
-SkyOrb is a hobby aircraft display. Aircraft information may be delayed, incomplete, or unavailable. **Do not use it for navigation, flight operations, search and rescue, or any other safety-critical decisions.** Use the local configuration dashboard only on a trusted network.
+**Project creator and maintainer:** John Christensen · [@Tikishark777](https://github.com/Tikishark777) · [SkyOrb Community Edition website](https://tikishark777.github.io/SkyOrb-Replacement/)
